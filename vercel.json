@@ -1,4 +1,7 @@
 {
+  "redirects": [
+    { "source": "/", "destination": "/Stremio/index.html", "permanent": false }
+  ],
   "rewrites": [
     {
       "source": "/api/debrid/:path*",
