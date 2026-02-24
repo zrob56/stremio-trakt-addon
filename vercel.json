@@ -1,0 +1,49 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/debrid/:path*",
+      "destination": "/api/debrid/proxy"
+    },
+    {
+      "source": "/stremio/:config/manifest.json",
+      "destination": "/api/stremio/handler?config=:config&resource=manifest"
+    },
+    {
+      "source": "/stremio/:config/catalog/:type/:id/:extra.json",
+      "destination": "/api/stremio/handler?config=:config&resource=catalog&type=:type&id=:id&extra=:extra"
+    },
+    {
+      "source": "/stremio/:config/catalog/:type/:id.json",
+      "destination": "/api/stremio/handler?config=:config&resource=catalog&type=:type&id=:id"
+    },
+    {
+      "source": "/stremio/:config/meta/:type/:id.json",
+      "destination": "/api/stremio/handler?config=:config&resource=meta&type=:type&id=:id"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api/debrid/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET,POST,PUT,DELETE,OPTIONS" },
+        { "key": "Access-Control-Allow-Headers", "value": "Content-Type,X-RD-Token" }
+      ]
+    },
+    {
+      "source": "/api/stremio/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET,POST,DELETE,OPTIONS" },
+        { "key": "Access-Control-Allow-Headers", "value": "Content-Type" }
+      ]
+    },
+    {
+      "source": "/stremio/:config/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET" }
+      ]
+    }
+  ]
+}

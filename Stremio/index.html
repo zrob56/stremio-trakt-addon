@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0a0a0a">
+    <title>Trakt Recommendations - Stremio Addon</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    colors: {
+                        trakt: {
+                            50: '#fff1f1', 100: '#ffe0e0', 200: '#ffc7c7',
+                            300: '#ffa0a0', 400: '#ff6b6b', 500: '#ed1c24',
+                            600: '#d91920', 700: '#b01018', 800: '#921218',
+                            900: '#79151a', 950: '#420508',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        body { font-family: 'Inter', system-ui, sans-serif; margin: 0; padding: 0; background: #0a0a0a; color: #e5e5e5; }
+        #root { min-height: 100vh; }
+        * { scrollbar-width: thin; scrollbar-color: #333 transparent; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in { animation: fadeIn 0.3s ease-out; }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .spinner { animation: spin 0.8s linear infinite; }
+
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .animate-pulse { animation: pulse 2s ease-in-out infinite; }
+
+        @keyframes slideOut { to { opacity: 0; transform: translateX(80px) scale(0.9); } }
+        .slide-out { animation: slideOut 0.3s ease-in forwards; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback, useRef, useMemo } = React;
+
+        // ─── Icon ───────────────────────────────────────────────────
+        function Icon({ name, size = 18, className = '' }) {
+            const ref = useRef(null);
+            useEffect(() => {
+                if (ref.current && lucide[name]) {
+                    ref.current.innerHTML = '';
+                    const svg = lucide.createElement(lucide[name]);
+                    svg.setAttribute('width', size);
+                    svg.setAttribute('height', size);
+                    if (className) svg.setAttribute('class', className);
+                    ref.current.appendChild(svg);
+                }
+            }, [name, size, className]);
+            return <span ref={ref} className="inline-flex items-center" />;
+        }
+
+        // ─── Toast ──────────────────────────────────────────────────
+        function Toast({ message, type = 'info', onClose }) {
+            useEffect(() => {
+                const t = setTimeout(onClose, 3000);
+                return () => clearTimeout(t);
+            }, [onClose]);
+            const colors = {
+                success: 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300',
+                error: 'bg-red-500/20 border-red-500/50 text-red-300',
+                info: 'bg-trakt-500/20 border-trakt-500/50 text-trakt-300',
+            };
+            return (
+                <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg border ${colors[type]} animate-fade-in flex items-center gap-2 max-w-sm`}>
+                    <Icon name={type === 'success' ? 'Check' : type === 'error' ? 'AlertCircle' : 'Info'} size={16} />
+                    <span className="text-sm">{message}</span>
+                </div>
+            );
+        }
+
+        // ─── Base64url helpers ──────────────────────────────────────
+        function encodeConfig(obj) {
+            return btoa(JSON.stringify(obj))
+                .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        }
+
+        // ─── Step 1: Client ID & Secret ───────────────────────────────
+        function StepClientId({ onNext }) {
+            const [clientId, setClientId] = useState('');
+            const [clientSecret, setClientSecret] = useState('');
+
+            const canContinue = clientId.trim() && clientSecret.trim();
+
+            return (
+                <div className="animate-fade-in space-y-6">
+                    <div className="text-center">
+                        <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-trakt-500/10 border border-trakt-500/20 mb-4">
+                            <Icon name="Tv" size={28} className="text-trakt-400" />
+                        </div>
+                        <h1 className="text-2xl font-bold text-white mb-2">Trakt Recommendations</h1>
+                        <p className="text-neutral-400 text-sm">Stremio addon powered by your Trakt watch history</p>
+                    </div>
+
+                    <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-6 space-y-4">
+                        <div>
+                            <label className="block text-sm font-medium text-neutral-300 mb-2">Client ID</label>
+                            <input
+                                type="text"
+                                value={clientId}
+                                onChange={e => setClientId(e.target.value)}
+                                placeholder="Paste your Client ID..."
+                                className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-4 py-3 text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-trakt-500 focus:ring-1 focus:ring-trakt-500/30 transition font-mono"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-medium text-neutral-300 mb-2">Client Secret</label>
+                            <input
+                                type="password"
+                                value={clientSecret}
+                                onChange={e => setClientSecret(e.target.value)}
+                                placeholder="Paste your Client Secret..."
+                                className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-4 py-3 text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-trakt-500 focus:ring-1 focus:ring-trakt-500/30 transition font-mono"
+                                onKeyDown={e => e.key === 'Enter' && canContinue && onNext(clientId.trim(), clientSecret.trim())}
+                            />
+                        </div>
+
+                        <button
+                            onClick={() => canContinue && onNext(clientId.trim(), clientSecret.trim())}
+                            disabled={!canContinue}
+                            className="w-full bg-trakt-600 hover:bg-trakt-700 disabled:bg-neutral-700 disabled:text-neutral-500 text-white font-medium rounded-lg px-4 py-3 text-sm transition flex items-center justify-center gap-2"
+                        >
+                            <Icon name="ArrowRight" size={16} /> Continue
+                        </button>
+
+                        <div className="bg-neutral-800/50 border border-neutral-700/50 rounded-lg p-4 space-y-2">
+                            <p className="text-xs text-neutral-400 font-medium">How to get these:</p>
+                            <ol className="text-xs text-neutral-500 space-y-1 list-decimal list-inside">
+                                <li>Go to <a href="https://trakt.tv/oauth/applications" target="_blank" rel="noopener" className="text-trakt-400 hover:text-trakt-300 underline">trakt.tv/oauth/applications</a></li>
+                                <li>Create or open your app</li>
+                                <li>Copy both the <strong className="text-neutral-300">Client ID</strong> and <strong className="text-neutral-300">Client Secret</strong></li>
+                            </ol>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // ─── Step 2: Device Auth ────────────────────────────────────
+        function StepAuth({ clientId, clientSecret, onNext, onBack }) {
+            const [deviceCode, setDeviceCode] = useState('');
+            const [userCode, setUserCode] = useState('');
+            const [verifyUrl, setVerifyUrl] = useState('');
+            const [expiresIn, setExpiresIn] = useState(0);
+            const [interval, setIntervalSec] = useState(5);
+            const [status, setStatus] = useState('starting'); // starting, waiting, success, error
+            const [error, setError] = useState('');
+            const [timeLeft, setTimeLeft] = useState(0);
+            const pollRef = useRef(null);
+            const timerRef = useRef(null);
+
+            useEffect(() => {
+                let cancelled = false;
+
+                (async () => {
+                    try {
+                        const res = await fetch('/api/stremio/auth?action=start', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ clientId }),
+                        });
+                        if (!res.ok) throw new Error('Failed to start auth');
+                        const data = await res.json();
+                        if (cancelled) return;
+
+                        setDeviceCode(data.device_code);
+                        setUserCode(data.user_code);
+                        setVerifyUrl(data.verification_url);
+                        setExpiresIn(data.expires_in);
+                        setIntervalSec(data.interval || 5);
+                        setTimeLeft(data.expires_in);
+                        setStatus('waiting');
+                    } catch (err) {
+                        if (!cancelled) {
+                            setError(err.message);
+                            setStatus('error');
+                        }
+                    }
+                })();
+
+                return () => { cancelled = true; };
+            }, [clientId]);
+
+            // Countdown timer
+            useEffect(() => {
+                if (status !== 'waiting') return;
+                timerRef.current = setInterval(() => {
+                    setTimeLeft(prev => {
+                        if (prev <= 1) {
+                            setStatus('error');
+                            setError('Authorization timed out. Please try again.');
+                            return 0;
+                        }
+                        return prev - 1;
+                    });
+                }, 1000);
+                return () => clearInterval(timerRef.current);
+            }, [status]);
+
+            // Poll for token
+            useEffect(() => {
+                if (status !== 'waiting' || !deviceCode) return;
+
+                pollRef.current = setInterval(async () => {
+                    try {
+                        const res = await fetch(
+                            `/api/stremio/auth?action=poll&clientId=${encodeURIComponent(clientId)}&clientSecret=${encodeURIComponent(clientSecret)}&deviceCode=${encodeURIComponent(deviceCode)}`
+                        );
+                        const data = await res.json();
+
+                        if (data.status === 'success') {
+                            clearInterval(pollRef.current);
+                            clearInterval(timerRef.current);
+                            setStatus('success');
+                            onNext({
+                                accessToken: data.accessToken,
+                                refreshToken: data.refreshToken,
+                            });
+                        } else if (data.status === 'expired' || data.status === 'denied') {
+                            clearInterval(pollRef.current);
+                            clearInterval(timerRef.current);
+                            setStatus('error');
+                            setError(data.status === 'denied' ? 'Authorization was denied.' : 'Code expired. Please try again.');
+                        }
+                    } catch {}
+                }, interval * 1000);
+
+                return () => clearInterval(pollRef.current);
+            }, [status, deviceCode, clientId, interval, onNext]);
+
+            const formatTime = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
+            return (
+                <div className="animate-fade-in space-y-6">
+                    <button onClick={onBack} className="text-neutral-500 hover:text-neutral-300 text-sm flex items-center gap-1 transition">
+                        <Icon name="ArrowLeft" size={14} /> Back
+                    </button>
+
+                    <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-6 space-y-6">
+                        {status === 'starting' && (
+                            <div className="flex items-center justify-center py-8">
+                                <div className="w-8 h-8 border-2 border-trakt-500/30 border-t-trakt-500 rounded-full spinner" />
+                            </div>
+                        )}
+
+                        {status === 'waiting' && (
+                            <>
+                                <div className="text-center space-y-4">
+                                    <p className="text-sm text-neutral-400">Enter this code at</p>
+                                    <a
+                                        href={verifyUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-trakt-400 hover:text-trakt-300 font-medium underline text-lg"
+                                    >
+                                        {verifyUrl}
+                                    </a>
+                                    <div className="bg-neutral-800 border-2 border-trakt-500/40 rounded-xl py-6 px-8 inline-block">
+                                        <p className="text-4xl font-bold font-mono tracking-[0.3em] text-white">{userCode}</p>
+                                    </div>
+                                    <div className="flex items-center justify-center gap-2 text-sm text-neutral-500">
+                                        <div className="w-4 h-4 border-2 border-trakt-500/30 border-t-trakt-500 rounded-full spinner" />
+                                        Waiting for authorization... {formatTime(timeLeft)}
+                                    </div>
+                                </div>
+                            </>
+                        )}
+
+                        {status === 'error' && (
+                            <div className="text-center space-y-4">
+                                <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-red-500/10">
+                                    <Icon name="AlertCircle" size={24} className="text-red-400" />
+                                </div>
+                                <p className="text-red-400 text-sm">{error}</p>
+                                <button
+                                    onClick={onBack}
+                                    className="bg-neutral-800 hover:bg-neutral-700 text-white rounded-lg px-4 py-2 text-sm transition"
+                                >
+                                    Try again
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // ─── Step 3: Browse & Curate ────────────────────────────────
+        function StepCurate({ clientId, tokens, onNext }) {
+            const [recommendations, setRecommendations] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [loadingMore, setLoadingMore] = useState(false);
+            const [page, setPage] = useState(1);
+            const [hasMore, setHasMore] = useState(true);
+            const [toast, setToast] = useState(null);
+            const [dismissing, setDismissing] = useState(new Set());
+
+            const fetchRecs = useCallback(async (pageNum) => {
+                try {
+                    const res = await fetch(`https://api.trakt.tv/recommendations/movies?limit=20&page=${pageNum}&extended=full`, {
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'trakt-api-version': '2',
+                            'trakt-api-key': clientId,
+                            'Authorization': `Bearer ${tokens.accessToken}`,
+                        },
+                    });
+                    if (!res.ok) throw new Error('Failed to fetch');
+                    const data = await res.json();
+                    if (data.length < 20) setHasMore(false);
+                    return data;
+                } catch {
+                    return [];
+                }
+            }, [clientId, tokens.accessToken]);
+
+            useEffect(() => {
+                (async () => {
+                    const data = await fetchRecs(1);
+                    setRecommendations(data);
+                    setLoading(false);
+                })();
+            }, [fetchRecs]);
+
+            const loadMore = useCallback(async () => {
+                setLoadingMore(true);
+                const nextPage = page + 1;
+                const data = await fetchRecs(nextPage);
+                setRecommendations(prev => [...prev, ...data]);
+                setPage(nextPage);
+                setLoadingMore(false);
+            }, [page, fetchRecs]);
+
+            const handleFeedback = useCallback(async (movie, action) => {
+                const traktId = movie.ids.trakt;
+                setDismissing(prev => new Set([...prev, traktId]));
+
+                // Wait for animation
+                await new Promise(r => setTimeout(r, 300));
+
+                try {
+                    const res = await fetch('/api/stremio/feedback', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            action,
+                            traktId,
+                            imdbId: movie.ids.imdb,
+                            accessToken: tokens.accessToken,
+                            clientId,
+                        }),
+                    });
+                    const data = await res.json();
+                    setToast({
+                        message: action === 'thumbsUp'
+                            ? `Added "${movie.title}" to watchlist`
+                            : `Dismissed "${movie.title}"`,
+                        type: action === 'thumbsUp' ? 'success' : 'info',
+                    });
+                } catch {
+                    setToast({ message: 'Action failed', type: 'error' });
+                }
+
+                setRecommendations(prev => prev.filter(m => m.ids.trakt !== traktId));
+                setDismissing(prev => {
+                    const next = new Set(prev);
+                    next.delete(traktId);
+                    return next;
+                });
+            }, [tokens.accessToken, clientId]);
+
+            return (
+                <div className="space-y-6">
+                    {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <h2 className="text-lg font-semibold text-white">Your Recommendations</h2>
+                            <p className="text-sm text-neutral-400 mt-1">
+                                Thumbs up adds to your watchlist. Thumbs down tells Trakt to improve suggestions.
+                            </p>
+                        </div>
+                        <button
+                            onClick={onNext}
+                            className="bg-trakt-600 hover:bg-trakt-700 text-white font-medium rounded-lg px-4 py-2 text-sm transition flex items-center gap-2 flex-shrink-0"
+                        >
+                            Install in Stremio <Icon name="ArrowRight" size={14} />
+                        </button>
+                    </div>
+
+                    {loading ? (
+                        <div className="flex items-center justify-center py-16">
+                            <div className="w-8 h-8 border-2 border-trakt-500/30 border-t-trakt-500 rounded-full spinner" />
+                        </div>
+                    ) : recommendations.length === 0 ? (
+                        <div className="text-center py-16 text-neutral-500">
+                            <Icon name="Film" size={48} className="mx-auto mb-4 text-neutral-700" />
+                            <p className="text-sm">No more recommendations right now.</p>
+                            <p className="text-xs mt-1">Watch more on Trakt to get personalized suggestions.</p>
+                            <button
+                                onClick={onNext}
+                                className="mt-4 bg-trakt-600 hover:bg-trakt-700 text-white rounded-lg px-4 py-2 text-sm transition"
+                            >
+                                Continue to Install
+                            </button>
+                        </div>
+                    ) : (
+                        <div className="space-y-3">
+                            {recommendations.map(movie => (
+                                <MovieCard
+                                    key={movie.ids.trakt}
+                                    movie={movie}
+                                    isDismissing={dismissing.has(movie.ids.trakt)}
+                                    onThumbsUp={() => handleFeedback(movie, 'thumbsUp')}
+                                    onThumbsDown={() => handleFeedback(movie, 'thumbsDown')}
+                                />
+                            ))}
+
+                            {hasMore && (
+                                <button
+                                    onClick={loadMore}
+                                    disabled={loadingMore}
+                                    className="w-full bg-neutral-800 hover:bg-neutral-700 disabled:bg-neutral-800 text-neutral-300 rounded-lg px-4 py-3 text-sm transition flex items-center justify-center gap-2"
+                                >
+                                    {loadingMore ? (
+                                        <><div className="w-4 h-4 border-2 border-neutral-500/30 border-t-neutral-400 rounded-full spinner" /> Loading...</>
+                                    ) : (
+                                        <><Icon name="ChevronDown" size={16} /> Load more</>
+                                    )}
+                                </button>
+                            )}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // ─── Movie Card ─────────────────────────────────────────────
+        function MovieCard({ movie, isDismissing, onThumbsUp, onThumbsDown }) {
+            const genres = movie.genres || [];
+            const rating = movie.rating ? movie.rating.toFixed(1) : null;
+
+            return (
+                <div className={`bg-neutral-900 border border-neutral-800 rounded-xl p-4 transition group ${isDismissing ? 'slide-out' : 'animate-fade-in'}`}>
+                    <div className="flex items-start gap-4">
+                        <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                                <h3 className="text-white font-medium text-sm truncate">{movie.title}</h3>
+                                {movie.year && <span className="text-xs text-neutral-500 flex-shrink-0">{movie.year}</span>}
+                            </div>
+                            {rating && (
+                                <div className="flex items-center gap-1 mb-2">
+                                    <Icon name="Star" size={12} className="text-amber-400" />
+                                    <span className="text-xs text-amber-400 font-medium">{rating}</span>
+                                    {movie.runtime && <span className="text-xs text-neutral-500 ml-2">{movie.runtime} min</span>}
+                                </div>
+                            )}
+                            {genres.length > 0 && (
+                                <div className="flex flex-wrap gap-1 mb-2">
+                                    {genres.slice(0, 4).map(g => (
+                                        <span key={g} className="px-2 py-0.5 bg-neutral-800 text-neutral-400 text-xs rounded-full">{g}</span>
+                                    ))}
+                                </div>
+                            )}
+                            {movie.overview && (
+                                <p className="text-xs text-neutral-500 line-clamp-2 leading-relaxed">{movie.overview}</p>
+                            )}
+                        </div>
+
+                        <div className="flex flex-col gap-2 flex-shrink-0">
+                            <button
+                                onClick={onThumbsUp}
+                                className="p-2.5 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 hover:border-emerald-500/40 text-emerald-400 rounded-lg transition"
+                                title="Interesting - add to watchlist"
+                            >
+                                <Icon name="ThumbsUp" size={16} />
+                            </button>
+                            <button
+                                onClick={onThumbsDown}
+                                className="p-2.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 hover:border-red-500/40 text-red-400 rounded-lg transition"
+                                title="Not interested - dismiss"
+                            >
+                                <Icon name="ThumbsDown" size={16} />
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // ─── Step 4: Install ────────────────────────────────────────
+        function StepInstall({ clientId, clientSecret, tokens, onBack }) {
+            const [copied, setCopied] = useState(false);
+            const [toast, setToast] = useState(null);
+
+            const config = { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, clientId, clientSecret };
+            const configEncoded = encodeConfig(config);
+            const baseUrl = window.location.origin;
+            const manifestUrl = `${baseUrl}/stremio/${configEncoded}/manifest.json`;
+            const stremioUrl = manifestUrl.replace(/^https?:\/\//, 'stremio://');
+
+            const copyUrl = useCallback(() => {
+                navigator.clipboard.writeText(manifestUrl);
+                setCopied(true);
+                setToast({ message: 'URL copied to clipboard', type: 'success' });
+                setTimeout(() => setCopied(false), 2000);
+            }, [manifestUrl]);
+
+            return (
+                <div className="animate-fade-in space-y-6">
+                    {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+
+                    <button onClick={onBack} className="text-neutral-500 hover:text-neutral-300 text-sm flex items-center gap-1 transition">
+                        <Icon name="ArrowLeft" size={14} /> Back to recommendations
+                    </button>
+
+                    <div className="text-center">
+                        <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 mb-4">
+                            <Icon name="CheckCircle" size={28} className="text-emerald-400" />
+                        </div>
+                        <h2 className="text-xl font-bold text-white mb-2">Ready to install!</h2>
+                        <p className="text-neutral-400 text-sm">Add this addon to Stremio to see your personalized catalogs</p>
+                    </div>
+
+                    <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-6 space-y-4">
+                        {/* One-click install */}
+                        <a
+                            href={stremioUrl}
+                            className="w-full bg-trakt-600 hover:bg-trakt-700 text-white font-medium rounded-lg px-4 py-3.5 text-sm transition flex items-center justify-center gap-2 block text-center"
+                        >
+                            <Icon name="Tv" size={16} /> Open in Stremio
+                        </a>
+
+                        <div className="flex items-center gap-3 text-xs text-neutral-500">
+                            <div className="flex-1 h-px bg-neutral-800" />
+                            <span>or copy the URL manually</span>
+                            <div className="flex-1 h-px bg-neutral-800" />
+                        </div>
+
+                        {/* Manual URL */}
+                        <div className="relative">
+                            <input
+                                type="text"
+                                readOnly
+                                value={manifestUrl}
+                                className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-4 py-3 pr-20 text-xs text-neutral-300 font-mono"
+                                onClick={e => e.target.select()}
+                            />
+                            <button
+                                onClick={copyUrl}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 bg-neutral-700 hover:bg-neutral-600 text-white rounded-md px-3 py-1.5 text-xs transition flex items-center gap-1"
+                            >
+                                <Icon name={copied ? 'Check' : 'Copy'} size={12} />
+                                {copied ? 'Copied' : 'Copy'}
+                            </button>
+                        </div>
+
+                        <div className="bg-neutral-800/50 border border-neutral-700/50 rounded-lg p-4 space-y-2">
+                            <p className="text-xs text-neutral-400 font-medium">Manual install:</p>
+                            <ol className="text-xs text-neutral-500 space-y-1 list-decimal list-inside">
+                                <li>Open Stremio and go to the Addons page</li>
+                                <li>Click the search box at the top</li>
+                                <li>Paste the URL above and press Enter</li>
+                                <li>Click "Install" when prompted</li>
+                            </ol>
+                        </div>
+                    </div>
+
+                    <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4">
+                        <h3 className="text-sm font-medium text-neutral-300 mb-2">Your catalogs in Stremio:</h3>
+                        <div className="space-y-2">
+                            {[
+                                { name: 'Recommended For You', desc: 'Personalized picks from your Trakt history', icon: 'Sparkles' },
+                                { name: 'Your Watchlist', desc: 'Movies you marked as interesting', icon: 'Bookmark' },
+                                { name: 'Trending on Trakt', desc: 'What everyone is watching right now', icon: 'TrendingUp' },
+                            ].map(cat => (
+                                <div key={cat.name} className="flex items-center gap-3 p-2 rounded-lg bg-neutral-800/50">
+                                    <div className="w-8 h-8 rounded-lg bg-trakt-500/10 flex items-center justify-center flex-shrink-0">
+                                        <Icon name={cat.icon} size={14} className="text-trakt-400" />
+                                    </div>
+                                    <div>
+                                        <p className="text-sm text-neutral-200">{cat.name}</p>
+                                        <p className="text-xs text-neutral-500">{cat.desc}</p>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // ─── App ────────────────────────────────────────────────────
+        function App() {
+            const [step, setStep] = useState(1);
+            const [clientId, setClientId] = useState('');
+            const [clientSecret, setClientSecret] = useState('');
+            const [tokens, setTokens] = useState(null);
+
+            return (
+                <div className="min-h-screen flex items-start justify-center p-4 pt-12">
+                    <div className="w-full max-w-2xl">
+                        {/* Progress */}
+                        <div className="flex items-center justify-center gap-2 mb-8">
+                            {[1, 2, 3, 4].map(s => (
+                                <React.Fragment key={s}>
+                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium transition ${
+                                        step >= s
+                                            ? 'bg-trakt-600 text-white'
+                                            : 'bg-neutral-800 text-neutral-500'
+                                    }`}>
+                                        {step > s ? <Icon name="Check" size={14} /> : s}
+                                    </div>
+                                    {s < 4 && <div className={`w-8 h-px ${step > s ? 'bg-trakt-600' : 'bg-neutral-800'}`} />}
+                                </React.Fragment>
+                            ))}
+                        </div>
+
+                        {step === 1 && (
+                            <StepClientId onNext={(id, secret) => { setClientId(id); setClientSecret(secret); setStep(2); }} />
+                        )}
+
+                        {step === 2 && (
+                            <StepAuth
+                                clientId={clientId}
+                                clientSecret={clientSecret}
+                                onNext={(t) => { setTokens(t); setStep(3); }}
+                                onBack={() => setStep(1)}
+                            />
+                        )}
+
+                        {step === 3 && (
+                            <StepCurate
+                                clientId={clientId}
+                                tokens={tokens}
+                                onNext={() => setStep(4)}
+                            />
+                        )}
+
+                        {step === 4 && (
+                            <StepInstall
+                                clientId={clientId}
+                                clientSecret={clientSecret}
+                                tokens={tokens}
+                                onBack={() => setStep(3)}
+                            />
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>
