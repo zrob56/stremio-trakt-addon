@@ -1,7 +1,20 @@
+import { Redis } from '@upstash/redis';
+
 const TRAKT_BASE = 'https://api.trakt.tv';
 
 class TraktAuthError extends Error {
   constructor(msg) { super(msg); this.name = 'TraktAuthError'; }
+}
+
+// ── Config resolution (UUID → KV lookup, or legacy base64 decode) ──────────
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function getRedis() {
+  const url = process.env.KV_REST_API_URL;
+  const token = process.env.KV_REST_API_TOKEN;
+  if (!url || !token) return null;
+  return new Redis({ url, token });
 }
 
 function decodeConfig(encoded) {
@@ -12,6 +25,33 @@ function decodeConfig(encoded) {
   } catch {
     return null;
   }
+}
+
+async function resolveConfig(encoded) {
+  if (!encoded) return { config: null, uuid: null };
+  if (UUID_REGEX.test(encoded)) {
+    const redis = getRedis();
+    if (!redis) return { config: null, uuid: null };
+    try {
+      const raw = await redis.get(`user:${encoded}`);
+      if (!raw) return { config: null, uuid: null };
+      const config = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      return { config, uuid: encoded };
+    } catch {
+      return { config: null, uuid: null };
+    }
+  }
+  // Legacy: base64-encoded config embedded in URL
+  return { config: decodeConfig(encoded), uuid: null };
+}
+
+async function saveRefreshedConfig(uuid, newConfig) {
+  if (!uuid) return;
+  try {
+    const redis = getRedis();
+    if (!redis) return;
+    await redis.set(`user:${uuid}`, JSON.stringify(newConfig), { ex: 63072000 });
+  } catch { /* non-fatal — request already succeeded */ }
 }
 
 function setCors(res) {
@@ -253,7 +293,7 @@ async function handleAICatalog(config, mediaType, genreKey, res) {
     .filter(r => r.status === 'fulfilled' && r.value)
     .map(r => r.value);
 
-  res.setHeader('Cache-Control', 's-maxage=86400, stale-while-revalidate=604800');
+  res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
   return res.json({ metas });
 }
 
@@ -311,7 +351,7 @@ async function handleAISearch(config, mediaType, query, res) {
   );
 
   const metas = lookups.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
-  res.setHeader('Cache-Control', 's-maxage=86400, stale-while-revalidate=604800');
+  res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
   return res.json({ metas });
 }
 
@@ -430,7 +470,7 @@ async function handleCatalog(config, type, id, extra, res) {
       genres: item.genres || undefined,
     }));
 
-  res.setHeader('Cache-Control', 's-maxage=86400, stale-while-revalidate=604800');
+  res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
   return res.json({ metas });
 }
 
@@ -451,7 +491,7 @@ export default async function handler(req, res) {
   const id = url.searchParams.get('id');
   const extra = url.searchParams.get('extra');
 
-  const config = decodeConfig(configEncoded);
+  const { config, uuid } = await resolveConfig(configEncoded);
 
   if (resource === 'manifest') return handleManifest(config, res);
 
@@ -466,6 +506,8 @@ export default async function handler(req, res) {
       if (err instanceof TraktAuthError && config.refreshToken) {
         const newConfig = await refreshToken(config);
         if (newConfig) {
+          // Persist the new tokens so subsequent requests don't loop on refresh
+          await saveRefreshedConfig(uuid, newConfig);
           try {
             return await handleCatalog(newConfig, type, id, extra, res);
           } catch {

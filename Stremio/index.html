@@ -847,15 +847,44 @@
         }
 
         // ─── Step 4: Install ────────────────────────────────────────
-        function StepInstall({ clientId, clientSecret, geminiKey, tokens, enabledCatalogs, setEnabledCatalogs, onBack, onManage }) {
+        function StepInstall({ clientId, clientSecret, geminiKey, tokens, enabledCatalogs, setEnabledCatalogs, onBack, onManage, uuid, onUuidSet }) {
             const [copied, setCopied] = useState(false);
             const [toast, setToast] = useState(null);
             const [warmingState, setWarmingState] = useState({ total: 0, done: 0, status: 'idle' });
+            const [installUuid, setInstallUuid] = useState(uuid || null);
+            const [installing, setInstalling] = useState(!uuid);
+
+            // Register config in KV to get a stable UUID-based URL (fixes token refresh loop)
+            useEffect(() => {
+                if (uuid) { setInstallUuid(uuid); setInstalling(false); return; }
+                (async () => {
+                    try {
+                        const res = await fetch('/api/stremio/install', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                clientId, clientSecret,
+                                ...(geminiKey ? { geminiKey } : {}),
+                                accessToken: tokens.accessToken,
+                                refreshToken: tokens.refreshToken,
+                                enabledCatalogs,
+                            }),
+                        });
+                        if (res.ok) {
+                            const { uuid: newUuid } = await res.json();
+                            setInstallUuid(newUuid);
+                            onUuidSet?.(newUuid);
+                        }
+                    } catch { /* non-fatal — falls back to base64 URL */ }
+                    setInstalling(false);
+                })();
+            }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
             const config = { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, clientId, clientSecret, ...(geminiKey ? { geminiKey } : {}), enabledCatalogs };
             const configEncoded = encodeConfig(config);
             const baseUrl = window.location.origin;
-            const manifestUrl = `${baseUrl}/stremio/${configEncoded}/manifest.json`;
+            const activeConfig = installUuid || configEncoded;
+            const manifestUrl = `${baseUrl}/stremio/${activeConfig}/manifest.json`;
             const stremioUrl = manifestUrl.replace(/^https?:\/\//, 'stremio://');
 
             const copyUrl = useCallback(() => {
@@ -866,7 +895,10 @@
             }, [manifestUrl]);
 
             // Pre-warm Vercel edge cache for all AI catalogs on mount
+            // Pre-warm Vercel edge cache — wait for UUID so we warm the right URL
             useEffect(() => {
+                if (installing) return;
+                const warmConfig = installUuid || configEncoded;
                 const aiCatalogs = enabledCatalogs.filter(id => id.startsWith('ai-'));
                 if (!aiCatalogs.length || !geminiKey) {
                     setWarmingState({ total: 0, done: 0, status: 'skipped' });
@@ -876,7 +908,7 @@
 
                 const warmCatalog = async (catalogId) => {
                     const type = catalogId.startsWith('ai-movie') ? 'movie' : 'series';
-                    const url = `${baseUrl}/stremio/${configEncoded}/catalog/${type}/${catalogId}.json`;
+                    const url = `${baseUrl}/stremio/${warmConfig}/catalog/${type}/${catalogId}.json`;
                     try { await fetch(url); } catch {}
                     setWarmingState(prev => ({ ...prev, done: prev.done + 1 }));
                 };
@@ -887,7 +919,7 @@
                     }
                     setWarmingState(prev => ({ ...prev, status: 'ready' }));
                 })();
-            }, []); // eslint-disable-line react-hooks/exhaustive-deps
+            }, [installing]); // eslint-disable-line react-hooks/exhaustive-deps
 
             return (
                 <div className="animate-fade-in space-y-6">
@@ -1141,7 +1173,7 @@
         }
 
         // ─── Step 5: Manage ─────────────────────────────────────────
-        function StepManage({ clientId, clientSecret, geminiKey: initialGeminiKey, initialCustomInstructions, tokens, enabledCatalogs, onCatalogsChange, onReauth }) {
+        function StepManage({ clientId, clientSecret, geminiKey: initialGeminiKey, initialCustomInstructions, tokens, enabledCatalogs, onCatalogsChange, onReauth, uuid }) {
             const [activeTab, setActiveTab] = useState('catalogs');
             const [copied, setCopied] = useState(false);
             const [toast, setToast] = useState(null);
@@ -1159,6 +1191,28 @@
             const config = { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, clientId, clientSecret, ...(geminiKey ? { geminiKey } : {}), ...(customInstructions.trim() ? { customInstructions: customInstructions.trim() } : {}), ...(excludedFromFeed.length > 0 ? { excludedFromFeed } : {}), enabledCatalogs };
             const configEncoded = encodeConfig(config);
 
+            // Push updated config to KV (keeps UUID entry current when settings change)
+            const pushToKV = useCallback(async (overrides = {}) => {
+                if (!uuid) return;
+                try {
+                    await fetch('/api/stremio/install', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            uuid,
+                            clientId, clientSecret,
+                            accessToken: tokens.accessToken,
+                            refreshToken: tokens.refreshToken,
+                            enabledCatalogs,
+                            ...(geminiKey ? { geminiKey } : {}),
+                            ...(customInstructions.trim() ? { customInstructions: customInstructions.trim() } : {}),
+                            ...(excludedFromFeed.length > 0 ? { excludedFromFeed } : {}),
+                            ...overrides,
+                        }),
+                    });
+                } catch { /* non-fatal */ }
+            }, [uuid, clientId, clientSecret, tokens, geminiKey, enabledCatalogs, customInstructions, excludedFromFeed]);
+
             const saveGeminiKey = useCallback(() => {
                 try {
                     const saved = JSON.parse(localStorage.getItem('trakt_config') || '{}');
@@ -1167,16 +1221,18 @@
                     setGeminiSaved(true);
                     setToast({ message: geminiKey.trim() ? 'Gemini key saved — reinstall addon to activate AI Picks' : 'Gemini key removed', type: 'success' });
                     setTimeout(() => setGeminiSaved(false), 2000);
+                    pushToKV({ geminiKey: geminiKey.trim() || undefined });
                 } catch {}
-            }, [geminiKey]);
+            }, [geminiKey, pushToKV]);
 
             const saveCustomInstructions = useCallback(() => {
                 try {
                     const saved = JSON.parse(localStorage.getItem('trakt_config') || '{}');
                     saved.customInstructions = customInstructions.trim();
                     localStorage.setItem('trakt_config', JSON.stringify(saved));
+                    pushToKV({ customInstructions: customInstructions.trim() || undefined });
                 } catch {}
-            }, [customInstructions]);
+            }, [customInstructions, pushToKV]);
 
             const loadFeedingData = useCallback(async () => {
                 if (feedingLoaded) return;
@@ -1233,7 +1289,8 @@
                 });
             }, []);
 
-            const manifestUrl = `${window.location.origin}/stremio/${configEncoded}/manifest.json`;
+            const activeConfig = uuid || configEncoded;
+            const manifestUrl = `${window.location.origin}/stremio/${activeConfig}/manifest.json`;
 
             const copyUrl = useCallback(() => {
                 navigator.clipboard.writeText(manifestUrl);
@@ -1435,6 +1492,14 @@
             const [customInstructions, setCustomInstructions] = useState('');
             const [tokens, setTokens] = useState(null);
             const [enabledCatalogs, setEnabledCatalogs] = useState(DEFAULT_CATALOGS);
+            const [uuid, setUuid] = useState(() => {
+                try { return localStorage.getItem('trakt_uuid') || null; } catch { return null; }
+            });
+
+            const handleUuidSet = useCallback((newUuid) => {
+                setUuid(newUuid);
+                try { localStorage.setItem('trakt_uuid', newUuid); } catch {}
+            }, []);
 
             // Load saved config from localStorage on mount
             useEffect(() => {
@@ -1476,10 +1541,11 @@
             }, []);
 
             const handleReauth = useCallback(() => {
-                try { localStorage.removeItem('trakt_config'); } catch {}
+                try { localStorage.removeItem('trakt_config'); localStorage.removeItem('trakt_uuid'); } catch {}
                 setTokens(null);
                 setClientId('');
                 setClientSecret('');
+                setUuid(null);
                 setStep(1);
             }, []);
 
@@ -1496,6 +1562,7 @@
                                 enabledCatalogs={enabledCatalogs}
                                 onCatalogsChange={handleCatalogsChange}
                                 onReauth={handleReauth}
+                                uuid={uuid}
                             />
                         </div>
                     </div>
@@ -1552,6 +1619,8 @@
                                 setEnabledCatalogs={setEnabledCatalogs}
                                 onBack={() => setStep(3)}
                                 onManage={() => setStep(5)}
+                                uuid={uuid}
+                                onUuidSet={handleUuidSet}
                             />
                         )}
                     </div>
