@@ -113,7 +113,7 @@ function handleManifest(res) {
         extra: [{ name: 'skip', isRequired: false }],
       },
     ],
-    behaviorHints: { configurable: true, configurationRequired: true },
+    behaviorHints: { configurable: true },
     idPrefixes: ['tt'],
   });
 }
