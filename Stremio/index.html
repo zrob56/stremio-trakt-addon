@@ -88,14 +88,14 @@
         const UTILITY_CATALOG_DEFS = [
           { id: 'trakt-watchlist',       type: 'movie', name: 'Your Watchlist',          desc: 'Movies you saved',                icon: 'Bookmark' },
           { id: 'trakt-trending',        type: 'movie', name: 'Trending on Trakt',       desc: 'What everyone is watching',       icon: 'TrendingUp' },
-          { id: 'trakt-watchlist-shows', type: 'show',  name: 'Your Show Watchlist',     desc: 'Shows you saved',                 icon: 'Bookmark' },
-          { id: 'trakt-trending-shows',  type: 'show',  name: 'Trending Shows on Trakt', desc: 'What everyone is watching',       icon: 'TrendingUp' },
+          { id: 'trakt-watchlist-shows', type: 'series', name: 'Your Show Watchlist',     desc: 'Shows you saved',                 icon: 'Bookmark' },
+          { id: 'trakt-trending-shows',  type: 'series', name: 'Trending Shows on Trakt', desc: 'What everyone is watching',       icon: 'TrendingUp' },
         ];
 
         // All catalog defs (for CatalogToggleList reorder)
         const ALL_AI_CATALOG_DEFS = [
           ...MOVIE_GENRE_KEYS.map(k => ({ id: `ai-movie-${k}`, type: 'movie', name: k === 'overall' ? 'AI Movie Picks' : `AI ${GENRE_DEFS.find(g=>g.key===k)?.label} Movies`, icon: GENRE_DEFS.find(g=>g.key===k)?.icon || 'Sparkles', requiresGemini: true })),
-          ...SHOW_GENRE_KEYS.map(k  => ({ id: `ai-show-${k}`,  type: 'show',  name: k === 'overall' ? 'AI Show Picks'  : `AI ${GENRE_DEFS.find(g=>g.key===k)?.label} Shows`,  icon: GENRE_DEFS.find(g=>g.key===k)?.icon || 'Sparkles', requiresGemini: true })),
+          ...SHOW_GENRE_KEYS.map(k  => ({ id: `ai-show-${k}`,  type: 'series', name: k === 'overall' ? 'AI Show Picks'  : `AI ${GENRE_DEFS.find(g=>g.key===k)?.label} Shows`,  icon: GENRE_DEFS.find(g=>g.key===k)?.icon || 'Sparkles', requiresGemini: true })),
         ];
         const CATALOG_DEFS = [...UTILITY_CATALOG_DEFS, ...ALL_AI_CATALOG_DEFS];
         const DEFAULT_CATALOGS = ['ai-movie-overall', 'ai-show-overall', 'trakt-watchlist', 'trakt-watchlist-shows', 'trakt-trending', 'trakt-trending-shows'];
@@ -839,7 +839,7 @@
                 setWarmingState({ total: aiCatalogs.length, done: 0, status: 'warming' });
 
                 const warmCatalog = async (catalogId) => {
-                    const type = catalogId.startsWith('ai-movie') ? 'movie' : 'show';
+                    const type = catalogId.startsWith('ai-movie') ? 'movie' : 'series';
                     const url = `${baseUrl}/stremio/${configEncoded}/catalog/${type}/${catalogId}.json`;
                     try { await fetch(url); } catch {}
                     setWarmingState(prev => ({ ...prev, done: prev.done + 1 }));
@@ -1105,14 +1105,18 @@
         }
 
         // ─── Step 5: Manage ─────────────────────────────────────────
-        function StepManage({ clientId, clientSecret, geminiKey: initialGeminiKey, tokens, enabledCatalogs, onCatalogsChange, onReauth }) {
-            const [activeTab, setActiveTab] = useState('movies');
+        function StepManage({ clientId, clientSecret, geminiKey: initialGeminiKey, initialCustomInstructions, tokens, enabledCatalogs, onCatalogsChange, onReauth }) {
+            const [activeTab, setActiveTab] = useState('catalogs');
             const [copied, setCopied] = useState(false);
             const [toast, setToast] = useState(null);
             const [geminiKey, setGeminiKey] = useState(initialGeminiKey || '');
             const [geminiSaved, setGeminiSaved] = useState(false);
+            const [customInstructions, setCustomInstructions] = useState(initialCustomInstructions || '');
+            const [feedingData, setFeedingData] = useState([]);
+            const [feedingOpen, setFeedingOpen] = useState(false);
+            const [feedingLoaded, setFeedingLoaded] = useState(false);
 
-            const config = { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, clientId, clientSecret, ...(geminiKey ? { geminiKey } : {}), enabledCatalogs };
+            const config = { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, clientId, clientSecret, ...(geminiKey ? { geminiKey } : {}), ...(customInstructions.trim() ? { customInstructions: customInstructions.trim() } : {}), enabledCatalogs };
             const configEncoded = encodeConfig(config);
 
             const saveGeminiKey = useCallback(() => {
@@ -1125,6 +1129,37 @@
                     setTimeout(() => setGeminiSaved(false), 2000);
                 } catch {}
             }, [geminiKey]);
+
+            const saveCustomInstructions = useCallback(() => {
+                try {
+                    const saved = JSON.parse(localStorage.getItem('trakt_config') || '{}');
+                    saved.customInstructions = customInstructions.trim();
+                    localStorage.setItem('trakt_config', JSON.stringify(saved));
+                } catch {}
+            }, [customInstructions]);
+
+            const loadFeedingData = useCallback(async () => {
+                if (feedingLoaded) return;
+                setFeedingLoaded(true);
+                try {
+                    const res = await fetch('https://api.trakt.tv/users/me/ratings/movies?limit=100&extended=full', {
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'trakt-api-version': '2',
+                            'trakt-api-key': clientId,
+                            'Authorization': `Bearer ${tokens.accessToken}`,
+                        },
+                    });
+                    if (!res.ok) return;
+                    const data = await res.json();
+                    setFeedingData(
+                        data.filter(r => r.rating >= 7)
+                            .sort((a, b) => b.rating - a.rating)
+                            .map(r => ({ title: r.movie.title, year: r.movie.year, rating: r.rating }))
+                    );
+                } catch {}
+            }, [clientId, tokens.accessToken, feedingLoaded]);
+
             const manifestUrl = `${window.location.origin}/stremio/${configEncoded}/manifest.json`;
 
             const copyUrl = useCallback(() => {
@@ -1224,6 +1259,47 @@
                                 onChange={onCatalogsChange}
                                 geminiKey={geminiKey}
                             />
+
+                            {/* Custom AI instructions */}
+                            <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 space-y-2">
+                                <label className="text-xs font-medium text-neutral-300">
+                                    Custom AI instructions <span className="text-neutral-600 font-normal">(optional)</span>
+                                </label>
+                                <textarea
+                                    value={customInstructions}
+                                    onChange={e => setCustomInstructions(e.target.value)}
+                                    onBlur={saveCustomInstructions}
+                                    placeholder="e.g. prefer foreign films, avoid sequels, only post-2000..."
+                                    rows={2}
+                                    className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-trakt-500 resize-none transition"
+                                />
+                                <p className="text-xs text-neutral-600">Saved on blur. Copy the updated manifest URL and reinstall to apply.</p>
+                            </div>
+
+                            {/* What's feeding the AI */}
+                            <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4">
+                                <button
+                                    onClick={() => { setFeedingOpen(o => !o); if (!feedingOpen) loadFeedingData(); }}
+                                    className="w-full flex items-center gap-2 text-xs font-medium text-neutral-400 hover:text-neutral-200 transition"
+                                >
+                                    <Icon name={feedingOpen ? 'ChevronDown' : 'ChevronRight'} size={12} />
+                                    What's feeding the AI
+                                    {feedingData.length > 0 && <span className="text-neutral-600 font-normal">({feedingData.length} titles)</span>}
+                                </button>
+                                {feedingOpen && (
+                                    <div className="mt-3 space-y-1 max-h-52 overflow-y-auto">
+                                        {feedingData.length === 0 ? (
+                                            <p className="text-xs text-neutral-600 text-center py-4">No highly-rated movies found yet.</p>
+                                        ) : feedingData.map((item, i) => (
+                                            <div key={i} className="flex items-center justify-between px-2 py-1.5 rounded bg-neutral-800/50 text-xs">
+                                                <span className="text-neutral-300 truncate">{item.title} <span className="text-neutral-600">({item.year})</span></span>
+                                                <span className="text-amber-400 flex-shrink-0 ml-3 font-medium">{item.rating}/10</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+
                             {enabledCatalogs.length > 0 && (
                                 <div>
                                     <p className="text-xs font-medium text-neutral-400 uppercase tracking-wide mb-2">Reorder active catalogs</p>
@@ -1249,6 +1325,7 @@
             const [clientId, setClientId] = useState('');
             const [clientSecret, setClientSecret] = useState('');
             const [geminiKey, setGeminiKey] = useState('');
+            const [customInstructions, setCustomInstructions] = useState('');
             const [tokens, setTokens] = useState(null);
             const [enabledCatalogs, setEnabledCatalogs] = useState(DEFAULT_CATALOGS);
 
@@ -1260,6 +1337,7 @@
                         setClientId(saved.clientId);
                         setClientSecret(saved.clientSecret || '');
                         setGeminiKey(saved.geminiKey || '');
+                        setCustomInstructions(saved.customInstructions || '');
                         if (saved.enabledCatalogs?.length) setEnabledCatalogs(saved.enabledCatalogs);
                         setTokens({ accessToken: saved.accessToken, refreshToken: saved.refreshToken });
                         setStep(5);
@@ -1270,7 +1348,7 @@
             const handleAuthComplete = useCallback((t) => {
                 try {
                     localStorage.setItem('trakt_config', JSON.stringify({
-                        clientId, clientSecret, geminiKey, enabledCatalogs,
+                        clientId, clientSecret, geminiKey, customInstructions, enabledCatalogs,
                         accessToken: t.accessToken,
                         refreshToken: t.refreshToken,
                     }));
@@ -1306,6 +1384,7 @@
                                 clientId={clientId}
                                 clientSecret={clientSecret}
                                 geminiKey={geminiKey}
+                                initialCustomInstructions={customInstructions}
                                 tokens={tokens}
                                 enabledCatalogs={enabledCatalogs}
                                 onCatalogsChange={handleCatalogsChange}

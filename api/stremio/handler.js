@@ -86,7 +86,7 @@ const AI_CATALOG_DEFS = [
     name: g === 'overall' ? 'AI Movie Picks' : `AI ${GENRE_LABELS[g]} Movies`,
   })),
   ...SHOW_GENRE_KEYS.map(g => ({
-    type: 'show', id: `ai-show-${g}`, extra: [],
+    type: 'series', id: `ai-show-${g}`, extra: [],
     name: g === 'overall' ? 'AI Show Picks' : `AI ${GENRE_LABELS[g]} Shows`,
   })),
 ];
@@ -94,8 +94,8 @@ const AI_CATALOG_DEFS = [
 const ALL_CATALOG_DEFS = [
   { type: 'movie', id: 'trakt-watchlist',       name: 'Your Watchlist',          extra: [{ name: 'skip', isRequired: false }] },
   { type: 'movie', id: 'trakt-trending',         name: 'Trending on Trakt',       extra: [{ name: 'skip', isRequired: false }] },
-  { type: 'show',  id: 'trakt-watchlist-shows',  name: 'Your Show Watchlist',     extra: [{ name: 'skip', isRequired: false }] },
-  { type: 'show',  id: 'trakt-trending-shows',   name: 'Trending Shows on Trakt', extra: [{ name: 'skip', isRequired: false }] },
+  { type: 'series', id: 'trakt-watchlist-shows',  name: 'Your Show Watchlist',     extra: [{ name: 'skip', isRequired: false }] },
+  { type: 'series', id: 'trakt-trending-shows',   name: 'Trending Shows on Trakt', extra: [{ name: 'skip', isRequired: false }] },
   ...AI_CATALOG_DEFS,
 ];
 
@@ -120,7 +120,7 @@ function handleManifest(config, res) {
     description: 'AI-powered movie & show recommendations by genre, powered by your Trakt history.',
     logo: 'https://walter.trakt.tv/hotlink-ok/public/favicon.svg',
     resources: ['catalog'],
-    types: ['movie', 'show'],
+    types: ['movie', 'series'],
     catalogs,
     behaviorHints: { configurable: true },
     idPrefixes: ['tt'],
@@ -137,20 +137,25 @@ function rpdbPoster(imdbId) {
 
 async function handleAICatalog(config, mediaType, genreKey, res) {
   const headers = traktHeaders(config.clientId, config.accessToken);
-  const isShow = mediaType === 'show';
+  const isShow = mediaType === 'series';
 
   // Temperature cycles weekly: 0.7 → 0.8 → 0.9 → 1.0 → repeat
   const weekNum = Math.floor(Date.now() / (7 * 24 * 60 * 60 * 1000));
   const temperature = [0.7, 0.8, 0.9, 1.0][weekNum % 4];
 
-  // Fetch top-rated items (≥7/10) from Trakt
+  // Fetch all ratings at once, split into liked (≥7) and disliked (≤6)
   const ratingsUrl = isShow
-    ? `${TRAKT_BASE}/users/me/ratings/shows?limit=50&extended=full`
-    : `${TRAKT_BASE}/users/me/ratings/movies?limit=50&extended=full`;
+    ? `${TRAKT_BASE}/users/me/ratings/shows?limit=100&extended=full`
+    : `${TRAKT_BASE}/users/me/ratings/movies?limit=100&extended=full`;
   const ratingsRaw = await traktFetch(ratingsUrl, headers);
+  const getItem = r => isShow ? r.show : r.movie;
   const topRated = ratingsRaw
     .filter(r => r.rating >= 7)
-    .map(r => ({ title: isShow ? r.show.title : r.movie.title, year: isShow ? r.show.year : r.movie.year }));
+    .map(r => ({ title: getItem(r).title, year: getItem(r).year }));
+  const disliked = ratingsRaw
+    .filter(r => r.rating <= 6)
+    .slice(0, 20)
+    .map(r => ({ title: getItem(r).title, year: getItem(r).year }));
 
   if (topRated.length === 0) return res.json({ metas: [] });
 
@@ -164,13 +169,17 @@ async function handleAICatalog(config, mediaType, genreKey, res) {
     watchedTitles = watchedRaw.map(w => isShow ? w.show.title : w.movie.title);
   } catch { /* non-fatal */ }
 
-  const ratedList = topRated.map(m => `- ${m.title} (${m.year})`).join('\n');
-  const watchedList = watchedTitles.slice(0, 30).map(t => `- ${t}`).join('\n') || 'None';
-  const mediaLabel = isShow ? 'TV shows' : 'movies';
-  const genreLabel = GENRE_LABELS[genreKey] || null;
-  const genreClause = genreLabel ? ` that are specifically in the ${genreLabel} genre` : '';
+  const ratedList    = topRated.map(m => `- ${m.title} (${m.year})`).join('\n');
+  const watchedList  = watchedTitles.slice(0, 30).map(t => `- ${t}`).join('\n') || 'None';
+  const dislikedList = disliked.map(m => `- ${m.title} (${m.year})`).join('\n') || 'None';
+  const mediaLabel   = isShow ? 'TV shows' : 'movies';
+  const genreLabel   = GENRE_LABELS[genreKey] || null;
+  const genreClause  = genreLabel ? ` that are specifically in the ${genreLabel} genre` : '';
+  const customClause = config.customInstructions?.trim()
+    ? `\n\nAdditional instructions from the user: ${config.customInstructions.trim()}`
+    : '';
 
-  const prompt = `You are a ${mediaLabel} recommendation engine.\n\nThe user has rated these ${mediaLabel} highly (7-10/10):\n${ratedList}\n\nThey have already watched these (do NOT recommend any of these):\n${watchedList}\n\nRecommend exactly 20 ${mediaLabel}${genreClause} they would likely enjoy that are NOT in either list above. Focus on similar themes, tone, directors, or genres.\nReturn ONLY a valid JSON array, no other text:\n[{"title": "Title Here", "year": 2020}, ...]`;
+  const prompt = `You are a ${mediaLabel} recommendation engine.\n\nThe user has rated these ${mediaLabel} highly (7-10/10):\n${ratedList}\n\nThey have already watched these (do NOT recommend any of these):\n${watchedList}\n\nThe user disliked these (rated 1-6/10) — avoid recommending anything similar in tone, genre, or style:\n${dislikedList}\n\nRecommend exactly 20 ${mediaLabel}${genreClause} they would likely enjoy that are NOT in either list above. Focus on similar themes, tone, directors, or genres.${customClause}\nReturn ONLY a valid JSON array, no other text:\n[{"title": "Title Here", "year": 2020}, ...]`;
 
   // Call Gemini
   const geminiRes = await fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
@@ -254,7 +263,7 @@ async function handleCatalog(config, type, id, extra, res) {
         `${TRAKT_BASE}/sync/watchlist/shows?sort=added&limit=20&page=${page}&extended=full`, headers
       );
       traktData = raw.map(item => item.show);
-      itemType = 'show';
+      itemType = 'series';
       break;
     }
     case 'trakt-trending-shows': {
@@ -262,7 +271,7 @@ async function handleCatalog(config, type, id, extra, res) {
         `${TRAKT_BASE}/shows/trending?limit=20&page=${page}&extended=full`, headers
       );
       traktData = raw.map(item => item.show);
-      itemType = 'show';
+      itemType = 'series';
       break;
     }
     default: {
