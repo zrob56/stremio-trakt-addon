@@ -286,8 +286,8 @@ async function handleCatalog(config, type, id, extra, res) {
     }
     default: {
       if (id.startsWith('ai-') && config.geminiKey) {
-        const parts = id.split('-');       // ['ai','movie','action']
-        const aiMediaType = parts[1];      // 'movie' | 'show'
+        const parts = id.split('-');
+        const aiMediaType = parts[1] === 'show' ? 'series' : parts[1];
         const genreKey = parts[2] || 'overall';
         return await handleAICatalog(config, aiMediaType, genreKey, res);
       }
