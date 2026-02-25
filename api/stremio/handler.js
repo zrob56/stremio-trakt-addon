@@ -36,6 +36,7 @@ function traktHeaders(clientId, accessToken) {
     'trakt-api-version': '2',
     'trakt-api-key': clientId,
     'Authorization': `Bearer ${accessToken}`,
+    'User-Agent': 'stremio-trakt-addon/1.0',
   };
 }
 

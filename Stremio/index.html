@@ -185,14 +185,14 @@
 
                 (async () => {
                     try {
-                        const res = await fetch('/api/stremio/auth?action=start', {
+                        const res = await fetch('https://api.trakt.tv/oauth/device/code', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ clientId }),
+                            body: JSON.stringify({ client_id: clientId }),
                         });
                         if (!res.ok) {
                             const body = await res.json().catch(() => ({}));
-                            throw new Error(body.details || body.error || `Server error ${res.status}`);
+                            throw new Error(body.error_description || body.error || `Trakt error ${res.status}`);
                         }
                         const data = await res.json();
                         if (cancelled) return;
@@ -237,24 +237,44 @@
 
                 pollRef.current = setInterval(async () => {
                     try {
-                        const res = await fetch(
-                            `/api/stremio/auth?action=poll&clientId=${encodeURIComponent(clientId)}&clientSecret=${encodeURIComponent(clientSecret)}&deviceCode=${encodeURIComponent(deviceCode)}`
-                        );
+                        const res = await fetch('https://api.trakt.tv/oauth/device/token', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                code: deviceCode,
+                                client_id: clientId,
+                                client_secret: clientSecret,
+                                redirect_uri: 'urn:ietf:wg:oauth:2.0:oob',
+                                grant_type: 'device_code',
+                            }),
+                        });
+
+                        // 400 = still pending, keep polling
+                        if (res.status === 400) return;
+
                         const data = await res.json();
 
-                        if (data.status === 'success') {
+                        if (res.ok) {
                             clearInterval(pollRef.current);
                             clearInterval(timerRef.current);
                             setStatus('success');
                             onNext({
-                                accessToken: data.accessToken,
-                                refreshToken: data.refreshToken,
+                                accessToken: data.access_token,
+                                refreshToken: data.refresh_token,
                             });
-                        } else if (data.status === 'expired' || data.status === 'denied') {
+                            return;
+                        }
+
+                        if (res.status === 418) {
                             clearInterval(pollRef.current);
                             clearInterval(timerRef.current);
                             setStatus('error');
-                            setError(data.status === 'denied' ? 'Authorization was denied.' : 'Code expired. Please try again.');
+                            setError('Authorization was denied.');
+                        } else if (res.status === 410) {
+                            clearInterval(pollRef.current);
+                            clearInterval(timerRef.current);
+                            setStatus('error');
+                            setError('Code expired. Please try again.');
                         }
                     } catch (e) {
                         console.warn('Poll error:', e);
