@@ -64,6 +64,19 @@
     <script type="text/babel">
         const { useState, useEffect, useCallback, useRef, useMemo } = React;
 
+        // ─── Catalog definitions ────────────────────────────────────
+        const CATALOG_DEFS = [
+          { id: 'trakt-recommended',       type: 'movie', name: 'Recommended For You',    desc: 'Personalized movie picks',        icon: 'Sparkles' },
+          { id: 'trakt-watchlist',         type: 'movie', name: 'Your Watchlist',          desc: 'Movies you saved',                icon: 'Bookmark' },
+          { id: 'trakt-trending',          type: 'movie', name: 'Trending on Trakt',       desc: 'What everyone is watching',       icon: 'TrendingUp' },
+          { id: 'trakt-ai-picks',          type: 'movie', name: 'AI Picks for You',        desc: 'Gemini AI recommendations',       icon: 'Bot', requiresGemini: true },
+          { id: 'trakt-recommended-shows', type: 'show',  name: 'Recommended Shows',       desc: 'Personalized show picks',         icon: 'Tv' },
+          { id: 'trakt-watchlist-shows',   type: 'show',  name: 'Your Show Watchlist',     desc: 'Shows you saved',                 icon: 'Bookmark' },
+          { id: 'trakt-trending-shows',    type: 'show',  name: 'Trending Shows on Trakt', desc: 'What everyone is watching',       icon: 'TrendingUp' },
+          { id: 'trakt-ai-picks-shows',    type: 'show',  name: 'AI Show Picks',           desc: 'Gemini AI show recommendations',  icon: 'Bot', requiresGemini: true },
+        ];
+        const DEFAULT_CATALOGS = CATALOG_DEFS.filter(c => !c.requiresGemini).map(c => c.id);
+
         // ─── Icon ───────────────────────────────────────────────────
         function Icon({ name, size = 18, className = '' }) {
             const ref = useRef(null);
@@ -109,6 +122,7 @@
         function StepClientId({ onNext }) {
             const [clientId, setClientId] = useState('');
             const [clientSecret, setClientSecret] = useState('');
+            const [geminiKey, setGeminiKey] = useState('');
 
             const canContinue = clientId.trim() && clientSecret.trim();
 
@@ -142,12 +156,26 @@
                                 onChange={e => setClientSecret(e.target.value)}
                                 placeholder="Paste your Client Secret..."
                                 className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-4 py-3 text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-trakt-500 focus:ring-1 focus:ring-trakt-500/30 transition font-mono"
-                                onKeyDown={e => e.key === 'Enter' && canContinue && onNext(clientId.trim(), clientSecret.trim())}
                             />
                         </div>
 
+                        <div>
+                            <label className="block text-sm font-medium text-neutral-300 mb-1">
+                                Gemini API Key <span className="text-neutral-500 font-normal">(optional — enables AI Picks catalog)</span>
+                            </label>
+                            <input
+                                type="password"
+                                value={geminiKey}
+                                onChange={e => setGeminiKey(e.target.value)}
+                                placeholder="Paste your Gemini API key..."
+                                className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-4 py-3 text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-trakt-500 focus:ring-1 focus:ring-trakt-500/30 transition font-mono"
+                                onKeyDown={e => e.key === 'Enter' && canContinue && onNext(clientId.trim(), clientSecret.trim(), geminiKey.trim())}
+                            />
+                            <p className="text-xs text-neutral-500 mt-1">Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" className="text-trakt-400 hover:text-trakt-300 underline">aistudio.google.com</a></p>
+                        </div>
+
                         <button
-                            onClick={() => canContinue && onNext(clientId.trim(), clientSecret.trim())}
+                            onClick={() => canContinue && onNext(clientId.trim(), clientSecret.trim(), geminiKey.trim())}
                             disabled={!canContinue}
                             className="w-full bg-trakt-600 hover:bg-trakt-700 disabled:bg-neutral-700 disabled:text-neutral-500 text-white font-medium rounded-lg px-4 py-3 text-sm transition flex items-center justify-center gap-2"
                         >
@@ -550,12 +578,67 @@
             );
         }
 
+        // ─── Catalog Toggle List ────────────────────────────────────
+        function CatalogToggleList({ enabledCatalogs, onChange, geminiKey }) {
+            const toggle = useCallback((id) => {
+                onChange(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+            }, [onChange]);
+
+            const movies = CATALOG_DEFS.filter(c => c.type === 'movie');
+            const shows  = CATALOG_DEFS.filter(c => c.type === 'show');
+
+            const renderRow = (cat) => {
+                const enabled = enabledCatalogs.includes(cat.id);
+                const locked  = cat.requiresGemini && !geminiKey;
+                return (
+                    <button
+                        key={cat.id}
+                        onClick={() => !locked && toggle(cat.id)}
+                        disabled={locked}
+                        className={`w-full flex items-center gap-3 p-3 rounded-lg border transition text-left ${
+                            locked
+                                ? 'border-neutral-800 opacity-40 cursor-not-allowed'
+                                : enabled
+                                    ? 'bg-trakt-500/10 border-trakt-500/30 hover:bg-trakt-500/15'
+                                    : 'bg-neutral-800/40 border-neutral-700/50 hover:bg-neutral-800'
+                        }`}
+                    >
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${enabled && !locked ? 'bg-trakt-500/20' : 'bg-neutral-700/50'}`}>
+                            <Icon name={cat.icon} size={14} className={enabled && !locked ? 'text-trakt-400' : 'text-neutral-500'} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                            <p className={`text-sm font-medium ${enabled && !locked ? 'text-neutral-200' : 'text-neutral-400'}`}>{cat.name}</p>
+                            <p className="text-xs text-neutral-500">{cat.requiresGemini ? 'Requires Gemini API key' : cat.desc}</p>
+                        </div>
+                        <div className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 border transition ${
+                            enabled && !locked ? 'bg-trakt-600 border-trakt-600' : 'border-neutral-600 bg-transparent'
+                        }`}>
+                            {enabled && !locked && <Icon name="Check" size={12} className="text-white" />}
+                        </div>
+                    </button>
+                );
+            };
+
+            return (
+                <div className="space-y-4">
+                    <div>
+                        <p className="text-xs font-medium text-neutral-400 uppercase tracking-wide mb-2">Movies</p>
+                        <div className="space-y-1.5">{movies.map(renderRow)}</div>
+                    </div>
+                    <div>
+                        <p className="text-xs font-medium text-neutral-400 uppercase tracking-wide mb-2">TV Shows</p>
+                        <div className="space-y-1.5">{shows.map(renderRow)}</div>
+                    </div>
+                </div>
+            );
+        }
+
         // ─── Step 4: Install ────────────────────────────────────────
-        function StepInstall({ clientId, clientSecret, tokens, onBack, onManage }) {
+        function StepInstall({ clientId, clientSecret, geminiKey, tokens, enabledCatalogs, setEnabledCatalogs, onBack, onManage }) {
             const [copied, setCopied] = useState(false);
             const [toast, setToast] = useState(null);
 
-            const config = { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, clientId, clientSecret };
+            const config = { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, clientId, clientSecret, ...(geminiKey ? { geminiKey } : {}), enabledCatalogs };
             const configEncoded = encodeConfig(config);
             const baseUrl = window.location.origin;
             const manifestUrl = `${baseUrl}/stremio/${configEncoded}/manifest.json`;
@@ -629,25 +712,12 @@
                     </div>
 
                     <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4">
-                        <h3 className="text-sm font-medium text-neutral-300 mb-2">Your catalogs in Stremio:</h3>
-                        <div className="space-y-2">
-                            {[
-                                { name: 'Recommended For You', desc: 'Personalized movie picks', icon: 'Sparkles' },
-                                { name: 'Recommended Shows', desc: 'Personalized show picks', icon: 'Tv' },
-                                { name: 'Your Watchlist', desc: 'Movies & shows you saved', icon: 'Bookmark' },
-                                { name: 'Trending on Trakt', desc: 'What everyone is watching', icon: 'TrendingUp' },
-                            ].map(cat => (
-                                <div key={cat.name} className="flex items-center gap-3 p-2 rounded-lg bg-neutral-800/50">
-                                    <div className="w-8 h-8 rounded-lg bg-trakt-500/10 flex items-center justify-center flex-shrink-0">
-                                        <Icon name={cat.icon} size={14} className="text-trakt-400" />
-                                    </div>
-                                    <div>
-                                        <p className="text-sm text-neutral-200">{cat.name}</p>
-                                        <p className="text-xs text-neutral-500">{cat.desc}</p>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
+                        <h3 className="text-sm font-medium text-neutral-300 mb-3">Choose your catalogs:</h3>
+                        <CatalogToggleList
+                            enabledCatalogs={enabledCatalogs}
+                            onChange={setEnabledCatalogs}
+                            geminiKey={geminiKey}
+                        />
                     </div>
 
                     <button
@@ -805,13 +875,26 @@
         }
 
         // ─── Step 5: Manage ─────────────────────────────────────────
-        function StepManage({ clientId, clientSecret, tokens, onReauth }) {
+        function StepManage({ clientId, clientSecret, geminiKey: initialGeminiKey, tokens, enabledCatalogs, onCatalogsChange, onReauth }) {
             const [activeTab, setActiveTab] = useState('movies');
             const [copied, setCopied] = useState(false);
             const [toast, setToast] = useState(null);
+            const [geminiKey, setGeminiKey] = useState(initialGeminiKey || '');
+            const [geminiSaved, setGeminiSaved] = useState(false);
 
-            const config = { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, clientId, clientSecret };
+            const config = { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, clientId, clientSecret, ...(geminiKey ? { geminiKey } : {}), enabledCatalogs };
             const configEncoded = encodeConfig(config);
+
+            const saveGeminiKey = useCallback(() => {
+                try {
+                    const saved = JSON.parse(localStorage.getItem('trakt_config') || '{}');
+                    saved.geminiKey = geminiKey.trim();
+                    localStorage.setItem('trakt_config', JSON.stringify(saved));
+                    setGeminiSaved(true);
+                    setToast({ message: geminiKey.trim() ? 'Gemini key saved — reinstall addon to activate AI Picks' : 'Gemini key removed', type: 'success' });
+                    setTimeout(() => setGeminiSaved(false), 2000);
+                } catch {}
+            }, [geminiKey]);
             const manifestUrl = `${window.location.origin}/stremio/${configEncoded}/manifest.json`;
 
             const copyUrl = useCallback(() => {
@@ -824,6 +907,7 @@
                 { id: 'movies', label: 'Movies', icon: 'Film' },
                 { id: 'shows', label: 'Shows', icon: 'Tv' },
                 { id: 'search', label: 'Search & Rate', icon: 'Search' },
+                { id: 'catalogs', label: 'Catalogs', icon: 'LayoutGrid' },
             ];
 
             return (
@@ -865,6 +949,28 @@
                         </div>
                     </div>
 
+                    {/* Gemini Key */}
+                    <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 space-y-2">
+                        <p className="text-xs text-neutral-400 font-medium">Gemini API Key <span className="text-neutral-600">(optional — enables AI Picks catalog)</span></p>
+                        <div className="flex gap-2">
+                            <input
+                                type="password"
+                                value={geminiKey}
+                                onChange={e => setGeminiKey(e.target.value)}
+                                placeholder="Paste Gemini API key..."
+                                className="flex-1 bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-trakt-500 font-mono transition"
+                            />
+                            <button
+                                onClick={saveGeminiKey}
+                                className="bg-trakt-600 hover:bg-trakt-700 text-white rounded-lg px-3 py-2 text-xs transition flex items-center gap-1"
+                            >
+                                <Icon name={geminiSaved ? 'Check' : 'Save'} size={12} />
+                                {geminiSaved ? 'Saved' : 'Save'}
+                            </button>
+                        </div>
+                        <p className="text-xs text-neutral-600">Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" className="text-trakt-400/70 hover:text-trakt-300 underline">aistudio.google.com</a>. After saving, reinstall the addon in Stremio to see AI Picks.</p>
+                    </div>
+
                     {/* Tabs */}
                     <div className="flex gap-1 bg-neutral-900 border border-neutral-800 rounded-xl p-1">
                         {tabs.map(tab => (
@@ -889,6 +995,18 @@
                     {activeTab === 'search' && (
                         <SearchTab clientId={clientId} tokens={tokens} />
                     )}
+                    {activeTab === 'catalogs' && (
+                        <div className="space-y-4">
+                            <CatalogToggleList
+                                enabledCatalogs={enabledCatalogs}
+                                onChange={onCatalogsChange}
+                                geminiKey={geminiKey}
+                            />
+                            <p className="text-xs text-neutral-500 text-center">
+                                After changing catalogs, copy the updated manifest URL above and reinstall the addon in Stremio.
+                            </p>
+                        </div>
+                    )}
                 </div>
             );
         }
@@ -898,7 +1016,9 @@
             const [step, setStep] = useState(1);
             const [clientId, setClientId] = useState('');
             const [clientSecret, setClientSecret] = useState('');
+            const [geminiKey, setGeminiKey] = useState('');
             const [tokens, setTokens] = useState(null);
+            const [enabledCatalogs, setEnabledCatalogs] = useState(DEFAULT_CATALOGS);
 
             // Load saved config from localStorage on mount
             useEffect(() => {
@@ -907,6 +1027,8 @@
                     if (saved && saved.accessToken && saved.clientId) {
                         setClientId(saved.clientId);
                         setClientSecret(saved.clientSecret || '');
+                        setGeminiKey(saved.geminiKey || '');
+                        if (saved.enabledCatalogs?.length) setEnabledCatalogs(saved.enabledCatalogs);
                         setTokens({ accessToken: saved.accessToken, refreshToken: saved.refreshToken });
                         setStep(5);
                     }
@@ -916,14 +1038,25 @@
             const handleAuthComplete = useCallback((t) => {
                 try {
                     localStorage.setItem('trakt_config', JSON.stringify({
-                        clientId, clientSecret,
+                        clientId, clientSecret, geminiKey, enabledCatalogs,
                         accessToken: t.accessToken,
                         refreshToken: t.refreshToken,
                     }));
                 } catch {}
                 setTokens(t);
                 setStep(3);
-            }, [clientId, clientSecret]);
+            }, [clientId, clientSecret, geminiKey, enabledCatalogs]);
+
+            const handleCatalogsChange = useCallback((updater) => {
+                setEnabledCatalogs(prev => {
+                    const next = typeof updater === 'function' ? updater(prev) : updater;
+                    try {
+                        const saved = JSON.parse(localStorage.getItem('trakt_config') || '{}');
+                        localStorage.setItem('trakt_config', JSON.stringify({ ...saved, enabledCatalogs: next }));
+                    } catch {}
+                    return next;
+                });
+            }, []);
 
             const handleReauth = useCallback(() => {
                 try { localStorage.removeItem('trakt_config'); } catch {}
@@ -940,7 +1073,10 @@
                             <StepManage
                                 clientId={clientId}
                                 clientSecret={clientSecret}
+                                geminiKey={geminiKey}
                                 tokens={tokens}
+                                enabledCatalogs={enabledCatalogs}
+                                onCatalogsChange={handleCatalogsChange}
                                 onReauth={handleReauth}
                             />
                         </div>
@@ -968,7 +1104,7 @@
                         </div>
 
                         {step === 1 && (
-                            <StepClientId onNext={(id, secret) => { setClientId(id); setClientSecret(secret); setStep(2); }} />
+                            <StepClientId onNext={(id, secret, gkey) => { setClientId(id); setClientSecret(secret); setGeminiKey(gkey || ''); setStep(2); }} />
                         )}
 
                         {step === 2 && (
@@ -992,7 +1128,10 @@
                             <StepInstall
                                 clientId={clientId}
                                 clientSecret={clientSecret}
+                                geminiKey={geminiKey}
                                 tokens={tokens}
+                                enabledCatalogs={enabledCatalogs}
+                                setEnabledCatalogs={setEnabledCatalogs}
                                 onBack={() => setStep(3)}
                                 onManage={() => setStep(5)}
                             />
