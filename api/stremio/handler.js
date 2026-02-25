@@ -104,7 +104,11 @@ function handleManifest(config, res) {
 
 // ── AI Catalog ────────────────────────────────────────────────
 
-const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+const RPDB_FREE_KEY = 't0-free-rpdb';
+function rpdbPoster(imdbId) {
+  return `https://api.ratingposterdb.com/${RPDB_FREE_KEY}/imdb/poster-default/${imdbId}.jpg`;
+}
 
 async function handleAICatalog(config, mediaType, res) {
   const headers = traktHeaders(config.clientId, config.accessToken);
@@ -172,6 +176,7 @@ async function handleAICatalog(config, mediaType, res) {
         id: item.ids.imdb,
         type: mediaType,
         name: item.title,
+        poster: rpdbPoster(item.ids.imdb),
         releaseInfo: item.year ? String(item.year) : undefined,
         description: item.overview || undefined,
         imdbRating: item.rating ? item.rating.toFixed(1) : undefined,
@@ -258,6 +263,7 @@ async function handleCatalog(config, type, id, extra, res) {
       id: item.ids.imdb,
       type: itemType,
       name: item.title,
+      poster: rpdbPoster(item.ids.imdb),
       releaseInfo: item.year ? String(item.year) : undefined,
       description: item.overview || undefined,
       imdbRating: item.rating ? item.rating.toFixed(1) : undefined,
