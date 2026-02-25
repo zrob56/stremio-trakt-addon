@@ -192,7 +192,7 @@
                         });
                         if (!res.ok) {
                             const body = await res.json().catch(() => ({}));
-                            throw new Error(body.error || body.details || `Server error ${res.status}`);
+                            throw new Error(body.details || body.error || `Server error ${res.status}`);
                         }
                         const data = await res.json();
                         if (cancelled) return;
