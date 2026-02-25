@@ -7,10 +7,10 @@ function setCors(res) {
 }
 
 function getRedis() {
-  const url = process.env.KV_REST_API_URL;
-  const token = process.env.KV_REST_API_TOKEN;
-  if (!url || !token) throw new Error('Vercel KV not configured');
-  return new Redis({ url, token });
+  if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
+    throw new Error('Upstash Redis not configured');
+  }
+  return Redis.fromEnv();
 }
 
 export default async function handler(req, res) {
@@ -39,7 +39,7 @@ export default async function handler(req, res) {
   try {
     redis = getRedis();
   } catch {
-    return res.status(503).json({ error: 'Storage not configured. Set up Vercel KV in the dashboard.' });
+    return res.status(503).json({ error: 'Storage not configured. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN env vars.' });
   }
 
   const config = {
