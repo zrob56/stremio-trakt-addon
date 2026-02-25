@@ -216,7 +216,7 @@ async function handleAICatalog(config, mediaType, genreKey, res) {
     .filter(r => r.status === 'fulfilled' && r.value)
     .map(r => r.value);
 
-  res.setHeader('Cache-Control', 's-maxage=3600, stale-while-revalidate=7200');
+  res.setHeader('Cache-Control', 's-maxage=86400, stale-while-revalidate=604800');
   return res.json({ metas });
 }
 

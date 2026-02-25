@@ -814,6 +814,7 @@
         function StepInstall({ clientId, clientSecret, geminiKey, tokens, enabledCatalogs, setEnabledCatalogs, onBack, onManage }) {
             const [copied, setCopied] = useState(false);
             const [toast, setToast] = useState(null);
+            const [warmingState, setWarmingState] = useState({ total: 0, done: 0, status: 'idle' });
 
             const config = { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, clientId, clientSecret, ...(geminiKey ? { geminiKey } : {}), enabledCatalogs };
             const configEncoded = encodeConfig(config);
@@ -827,6 +828,30 @@
                 setToast({ message: 'URL copied to clipboard', type: 'success' });
                 setTimeout(() => setCopied(false), 2000);
             }, [manifestUrl]);
+
+            // Pre-warm Vercel edge cache for all AI catalogs on mount
+            useEffect(() => {
+                const aiCatalogs = enabledCatalogs.filter(id => id.startsWith('ai-'));
+                if (!aiCatalogs.length || !geminiKey) {
+                    setWarmingState({ total: 0, done: 0, status: 'skipped' });
+                    return;
+                }
+                setWarmingState({ total: aiCatalogs.length, done: 0, status: 'warming' });
+
+                const warmCatalog = async (catalogId) => {
+                    const type = catalogId.startsWith('ai-movie') ? 'movie' : 'show';
+                    const url = `${baseUrl}/stremio/${configEncoded}/catalog/${type}/${catalogId}.json`;
+                    try { await fetch(url); } catch {}
+                    setWarmingState(prev => ({ ...prev, done: prev.done + 1 }));
+                };
+
+                (async () => {
+                    for (let i = 0; i < aiCatalogs.length; i += 3) {
+                        await Promise.all(aiCatalogs.slice(i, i + 3).map(warmCatalog));
+                    }
+                    setWarmingState(prev => ({ ...prev, status: 'ready' }));
+                })();
+            }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
             return (
                 <div className="animate-fade-in space-y-6">
@@ -887,6 +912,34 @@
                             </ol>
                         </div>
                     </div>
+
+                    {/* Cache warming status */}
+                    {warmingState.status === 'warming' && (
+                        <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4">
+                            <div className="flex items-center gap-3">
+                                <div className="w-4 h-4 border-2 border-trakt-500/30 border-t-trakt-500 rounded-full spinner flex-shrink-0" />
+                                <div className="flex-1">
+                                    <p className="text-sm text-neutral-300 font-medium">Preparing AI catalogs…</p>
+                                    <p className="text-xs text-neutral-500 mt-0.5">{warmingState.done} of {warmingState.total} ready — they'll load instantly in Stremio</p>
+                                </div>
+                            </div>
+                            <div className="mt-3 h-1 bg-neutral-800 rounded-full overflow-hidden">
+                                <div
+                                    className="h-full bg-trakt-500 rounded-full transition-all duration-500"
+                                    style={{ width: `${warmingState.total > 0 ? (warmingState.done / warmingState.total) * 100 : 0}%` }}
+                                />
+                            </div>
+                        </div>
+                    )}
+                    {warmingState.status === 'ready' && (
+                        <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4 flex items-center gap-3">
+                            <Icon name="CheckCircle" size={18} className="text-emerald-400 flex-shrink-0" />
+                            <div>
+                                <p className="text-sm text-emerald-300 font-medium">AI catalogs ready</p>
+                                <p className="text-xs text-neutral-500">All {warmingState.total} catalog{warmingState.total !== 1 ? 's' : ''} will load instantly when you open Stremio</p>
+                            </div>
+                        </div>
+                    )}
 
                     <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-5">
                         <h3 className="text-sm font-medium text-neutral-300 mb-4">Choose your catalogs:</h3>
