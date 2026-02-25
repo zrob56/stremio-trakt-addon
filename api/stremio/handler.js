@@ -64,20 +64,40 @@ async function refreshToken(config) {
   return { ...config, accessToken: tokens.access_token, refreshToken: tokens.refresh_token };
 }
 
+// ── Genre definitions ──────────────────────────────────────────
+
+const GENRE_LABELS = {
+  overall: null,
+  action: 'Action', adventure: 'Adventure', animation: 'Animation',
+  comedy: 'Comedy', crime: 'Crime', documentary: 'Documentary',
+  drama: 'Drama', fantasy: 'Fantasy', horror: 'Horror',
+  mystery: 'Mystery', romance: 'Romance', scifi: 'Science Fiction',
+  thriller: 'Thriller', western: 'Western',
+};
+
+const MOVIE_GENRE_KEYS = ['overall','action','adventure','animation','comedy','crime','documentary','drama','fantasy','horror','mystery','romance','scifi','thriller','western'];
+const SHOW_GENRE_KEYS  = ['overall','action','adventure','animation','comedy','crime','drama','fantasy','horror','mystery','romance','scifi','thriller'];
+
 // ── Manifest ──────────────────────────────────────────────────
 
-const ALL_CATALOG_DEFS = [
-  { type: 'movie', id: 'trakt-recommended',       name: 'Recommended For You',     extra: [{ name: 'skip', isRequired: false }, { name: 'genre', isRequired: false }] },
-  { type: 'movie', id: 'trakt-watchlist',          name: 'Your Watchlist',          extra: [{ name: 'skip', isRequired: false }] },
-  { type: 'movie', id: 'trakt-trending',           name: 'Trending on Trakt',       extra: [{ name: 'skip', isRequired: false }] },
-  { type: 'movie', id: 'trakt-ai-picks',           name: 'AI Picks for You',        extra: [] },
-  { type: 'show',  id: 'trakt-recommended-shows',  name: 'Recommended Shows',       extra: [{ name: 'skip', isRequired: false }] },
-  { type: 'show',  id: 'trakt-watchlist-shows',    name: 'Your Show Watchlist',     extra: [{ name: 'skip', isRequired: false }] },
-  { type: 'show',  id: 'trakt-trending-shows',     name: 'Trending Shows on Trakt', extra: [{ name: 'skip', isRequired: false }] },
-  { type: 'show',  id: 'trakt-ai-picks-shows',     name: 'AI Show Picks',           extra: [] },
+const AI_CATALOG_DEFS = [
+  ...MOVIE_GENRE_KEYS.map(g => ({
+    type: 'movie', id: `ai-movie-${g}`, extra: [],
+    name: g === 'overall' ? 'AI Movie Picks' : `AI ${GENRE_LABELS[g]} Movies`,
+  })),
+  ...SHOW_GENRE_KEYS.map(g => ({
+    type: 'show', id: `ai-show-${g}`, extra: [],
+    name: g === 'overall' ? 'AI Show Picks' : `AI ${GENRE_LABELS[g]} Shows`,
+  })),
 ];
 
-const AI_CATALOG_IDS = ['trakt-ai-picks', 'trakt-ai-picks-shows'];
+const ALL_CATALOG_DEFS = [
+  { type: 'movie', id: 'trakt-watchlist',       name: 'Your Watchlist',          extra: [{ name: 'skip', isRequired: false }] },
+  { type: 'movie', id: 'trakt-trending',         name: 'Trending on Trakt',       extra: [{ name: 'skip', isRequired: false }] },
+  { type: 'show',  id: 'trakt-watchlist-shows',  name: 'Your Show Watchlist',     extra: [{ name: 'skip', isRequired: false }] },
+  { type: 'show',  id: 'trakt-trending-shows',   name: 'Trending Shows on Trakt', extra: [{ name: 'skip', isRequired: false }] },
+  ...AI_CATALOG_DEFS,
+];
 
 function handleManifest(config, res) {
   let catalogs;
@@ -86,17 +106,20 @@ function handleManifest(config, res) {
       .map(id => ALL_CATALOG_DEFS.find(c => c.id === id))
       .filter(Boolean);
   } else {
-    // Backward compat: all non-AI catalogs, plus AI if geminiKey present
-    catalogs = ALL_CATALOG_DEFS.filter(c => !AI_CATALOG_IDS.includes(c.id) || config?.geminiKey);
+    // Backward compat: utility catalogs + AI overall if gemini key present
+    catalogs = ALL_CATALOG_DEFS.filter(c =>
+      ['trakt-watchlist','trakt-trending','trakt-watchlist-shows','trakt-trending-shows'].includes(c.id) ||
+      (config?.geminiKey && ['ai-movie-overall','ai-show-overall'].includes(c.id))
+    );
   }
 
   return res.json({
     id: 'com.zachr.trakt.recommendations',
-    version: '1.2.0',
+    version: '2.0.0',
     name: 'Trakt Recommendations',
-    description: 'Personalized movie & show recommendations from your Trakt history. Rate from within Stremio.',
+    description: 'AI-powered movie & show recommendations by genre, powered by your Trakt history.',
     logo: 'https://walter.trakt.tv/hotlink-ok/public/favicon.svg',
-    resources: ['catalog', 'stream'],
+    resources: ['catalog'],
     types: ['movie', 'show'],
     catalogs,
     behaviorHints: { configurable: true },
@@ -112,7 +135,7 @@ function rpdbPoster(imdbId) {
   return `https://api.ratingposterdb.com/${RPDB_FREE_KEY}/imdb/poster-default/${imdbId}.jpg`;
 }
 
-async function handleAICatalog(config, mediaType, res) {
+async function handleAICatalog(config, mediaType, genreKey, res) {
   const headers = traktHeaders(config.clientId, config.accessToken);
   const isShow = mediaType === 'show';
 
@@ -140,8 +163,10 @@ async function handleAICatalog(config, mediaType, res) {
   const ratedList = topRated.map(m => `- ${m.title} (${m.year})`).join('\n');
   const watchedList = watchedTitles.slice(0, 30).map(t => `- ${t}`).join('\n') || 'None';
   const mediaLabel = isShow ? 'TV shows' : 'movies';
+  const genreLabel = GENRE_LABELS[genreKey] || null;
+  const genreClause = genreLabel ? ` that are specifically in the ${genreLabel} genre` : '';
 
-  const prompt = `You are a ${mediaLabel} recommendation engine.\n\nThe user has rated these ${mediaLabel} highly (7-10/10):\n${ratedList}\n\nThey have already watched these (do NOT recommend any of these):\n${watchedList}\n\nRecommend exactly 20 ${mediaLabel} they would likely enjoy that are NOT in either list above. Focus on similar themes, tone, directors, or genres.\nReturn ONLY a valid JSON array, no other text:\n[{"title": "Title Here", "year": 2020}, ...]`;
+  const prompt = `You are a ${mediaLabel} recommendation engine.\n\nThe user has rated these ${mediaLabel} highly (7-10/10):\n${ratedList}\n\nThey have already watched these (do NOT recommend any of these):\n${watchedList}\n\nRecommend exactly 20 ${mediaLabel}${genreClause} they would likely enjoy that are NOT in either list above. Focus on similar themes, tone, directors, or genres.\nReturn ONLY a valid JSON array, no other text:\n[{"title": "Title Here", "year": 2020}, ...]`;
 
   // Call Gemini
   const geminiRes = await fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
@@ -206,12 +231,6 @@ async function handleCatalog(config, type, id, extra, res) {
   let itemType = type;
 
   switch (id) {
-    case 'trakt-recommended': {
-      let url = `${TRAKT_BASE}/recommendations/movies?limit=20&page=${page}&extended=full`;
-      if (params.genre) url += `&genres=${encodeURIComponent(params.genre)}`;
-      traktData = await traktFetch(url, headers);
-      break;
-    }
     case 'trakt-watchlist': {
       const raw = await traktFetch(
         `${TRAKT_BASE}/sync/watchlist/movies?sort=added&limit=20&page=${page}&extended=full`, headers
@@ -224,13 +243,6 @@ async function handleCatalog(config, type, id, extra, res) {
         `${TRAKT_BASE}/movies/trending?limit=20&page=${page}&extended=full`, headers
       );
       traktData = raw.map(item => item.movie);
-      break;
-    }
-    case 'trakt-recommended-shows': {
-      traktData = await traktFetch(
-        `${TRAKT_BASE}/recommendations/shows?limit=20&page=${page}&extended=full`, headers
-      );
-      itemType = 'show';
       break;
     }
     case 'trakt-watchlist-shows': {
@@ -249,14 +261,15 @@ async function handleCatalog(config, type, id, extra, res) {
       itemType = 'show';
       break;
     }
-    case 'trakt-ai-picks':
-    case 'trakt-ai-picks-shows': {
-      if (!config.geminiKey) return res.json({ metas: [] });
-      const aiMediaType = id === 'trakt-ai-picks-shows' ? 'show' : 'movie';
-      return await handleAICatalog(config, aiMediaType, res);
-    }
-    default:
+    default: {
+      if (id.startsWith('ai-') && config.geminiKey) {
+        const parts = id.split('-');       // ['ai','movie','action']
+        const aiMediaType = parts[1];      // 'movie' | 'show'
+        const genreKey = parts[2] || 'overall';
+        return await handleAICatalog(config, aiMediaType, genreKey, res);
+      }
       return res.json({ metas: [] });
+    }
   }
 
   const metas = (traktData || [])
@@ -273,29 +286,6 @@ async function handleCatalog(config, type, id, extra, res) {
     }));
 
   return res.json({ metas });
-}
-
-// ── Stream ─────────────────────────────────────────────────────
-
-function handleStream(configEncoded, type, id, req, res) {
-  const host = req.headers['x-forwarded-host'] || req.headers.host;
-  const proto = req.headers['x-forwarded-proto'] || 'https';
-  const base = `${proto}://${host}`;
-
-  return res.json({
-    streams: [
-      {
-        name: 'Trakt',
-        title: '👍 Add to Watchlist',
-        externalUrl: `${base}/api/stremio/action?a=watchlist&type=${type}&id=${id}&config=${configEncoded}`,
-      },
-      {
-        name: 'Trakt',
-        title: '👎 Not Interested',
-        externalUrl: `${base}/api/stremio/action?a=dismiss&type=${type}&id=${id}&config=${configEncoded}`,
-      },
-    ],
-  });
 }
 
 // ── Main Handler ──────────────────────────────────────────────
@@ -320,11 +310,7 @@ export default async function handler(req, res) {
   if (resource === 'manifest') return handleManifest(config, res);
 
   if (!config || !config.accessToken || !config.clientId) {
-    return res.status(400).json({ metas: [], streams: [] });
-  }
-
-  if (resource === 'stream') {
-    return handleStream(configEncoded, type, id, req, res);
+    return res.status(400).json({ metas: [] });
   }
 
   if (resource === 'catalog') {

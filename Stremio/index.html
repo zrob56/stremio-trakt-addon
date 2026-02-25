@@ -65,17 +65,40 @@
         const { useState, useEffect, useCallback, useRef, useMemo } = React;
 
         // ─── Catalog definitions ────────────────────────────────────
-        const CATALOG_DEFS = [
-          { id: 'trakt-recommended',       type: 'movie', name: 'Recommended For You',    desc: 'Personalized movie picks',        icon: 'Sparkles' },
-          { id: 'trakt-watchlist',         type: 'movie', name: 'Your Watchlist',          desc: 'Movies you saved',                icon: 'Bookmark' },
-          { id: 'trakt-trending',          type: 'movie', name: 'Trending on Trakt',       desc: 'What everyone is watching',       icon: 'TrendingUp' },
-          { id: 'trakt-ai-picks',          type: 'movie', name: 'AI Picks for You',        desc: 'Gemini AI recommendations',       icon: 'Bot', requiresGemini: true },
-          { id: 'trakt-recommended-shows', type: 'show',  name: 'Recommended Shows',       desc: 'Personalized show picks',         icon: 'Tv' },
-          { id: 'trakt-watchlist-shows',   type: 'show',  name: 'Your Show Watchlist',     desc: 'Shows you saved',                 icon: 'Bookmark' },
-          { id: 'trakt-trending-shows',    type: 'show',  name: 'Trending Shows on Trakt', desc: 'What everyone is watching',       icon: 'TrendingUp' },
-          { id: 'trakt-ai-picks-shows',    type: 'show',  name: 'AI Show Picks',           desc: 'Gemini AI show recommendations',  icon: 'Bot', requiresGemini: true },
+        const GENRE_DEFS = [
+          { key: 'overall',     label: 'Overall',      icon: 'Sparkles' },
+          { key: 'action',      label: 'Action',       icon: 'Zap' },
+          { key: 'adventure',   label: 'Adventure',    icon: 'Compass' },
+          { key: 'animation',   label: 'Animation',    icon: 'Smile' },
+          { key: 'comedy',      label: 'Comedy',       icon: 'Laugh' },
+          { key: 'crime',       label: 'Crime',        icon: 'Shield' },
+          { key: 'documentary', label: 'Documentary',  icon: 'Camera' },
+          { key: 'drama',       label: 'Drama',        icon: 'Theater' },
+          { key: 'fantasy',     label: 'Fantasy',      icon: 'Wand2' },
+          { key: 'horror',      label: 'Horror',       icon: 'Skull' },
+          { key: 'mystery',     label: 'Mystery',      icon: 'Search' },
+          { key: 'romance',     label: 'Romance',      icon: 'Heart' },
+          { key: 'scifi',       label: 'Sci-Fi',       icon: 'Rocket' },
+          { key: 'thriller',    label: 'Thriller',     icon: 'AlertTriangle' },
+          { key: 'western',     label: 'Western',      icon: 'MapPin' },
         ];
-        const DEFAULT_CATALOGS = CATALOG_DEFS.filter(c => !c.requiresGemini).map(c => c.id);
+        const MOVIE_GENRE_KEYS = ['overall','action','adventure','animation','comedy','crime','documentary','drama','fantasy','horror','mystery','romance','scifi','thriller','western'];
+        const SHOW_GENRE_KEYS  = ['overall','action','adventure','animation','comedy','crime','drama','fantasy','horror','mystery','romance','scifi','thriller'];
+
+        const UTILITY_CATALOG_DEFS = [
+          { id: 'trakt-watchlist',       type: 'movie', name: 'Your Watchlist',          desc: 'Movies you saved',                icon: 'Bookmark' },
+          { id: 'trakt-trending',        type: 'movie', name: 'Trending on Trakt',       desc: 'What everyone is watching',       icon: 'TrendingUp' },
+          { id: 'trakt-watchlist-shows', type: 'show',  name: 'Your Show Watchlist',     desc: 'Shows you saved',                 icon: 'Bookmark' },
+          { id: 'trakt-trending-shows',  type: 'show',  name: 'Trending Shows on Trakt', desc: 'What everyone is watching',       icon: 'TrendingUp' },
+        ];
+
+        // All catalog defs (for CatalogToggleList reorder)
+        const ALL_AI_CATALOG_DEFS = [
+          ...MOVIE_GENRE_KEYS.map(k => ({ id: `ai-movie-${k}`, type: 'movie', name: k === 'overall' ? 'AI Movie Picks' : `AI ${GENRE_DEFS.find(g=>g.key===k)?.label} Movies`, icon: GENRE_DEFS.find(g=>g.key===k)?.icon || 'Sparkles', requiresGemini: true })),
+          ...SHOW_GENRE_KEYS.map(k  => ({ id: `ai-show-${k}`,  type: 'show',  name: k === 'overall' ? 'AI Show Picks'  : `AI ${GENRE_DEFS.find(g=>g.key===k)?.label} Shows`,  icon: GENRE_DEFS.find(g=>g.key===k)?.icon || 'Sparkles', requiresGemini: true })),
+        ];
+        const CATALOG_DEFS = [...UTILITY_CATALOG_DEFS, ...ALL_AI_CATALOG_DEFS];
+        const DEFAULT_CATALOGS = ['ai-movie-overall', 'ai-show-overall', 'trakt-watchlist', 'trakt-watchlist-shows', 'trakt-trending', 'trakt-trending-shows'];
 
         // ─── Icon ───────────────────────────────────────────────────
         function Icon({ name, size = 18, className = '' }) {
@@ -578,6 +601,106 @@
             );
         }
 
+        // ─── Genre Picker ───────────────────────────────────────────
+        function GenrePicker({ enabledCatalogs, onChange, geminiKey }) {
+            const hasGemini = !!geminiKey;
+
+            const toggleId = (id) =>
+                onChange(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+
+            const toggleUtility = (id) => toggleId(id);
+
+            const renderGenreChip = (key, prefix) => {
+                const id = `${prefix}-${key}`;
+                const def = GENRE_DEFS.find(g => g.key === key);
+                const active = enabledCatalogs.includes(id);
+                const locked = !hasGemini;
+                return (
+                    <button
+                        key={id}
+                        onClick={() => !locked && toggleId(id)}
+                        disabled={locked}
+                        title={locked ? 'Requires Gemini API key' : def?.label}
+                        className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition border ${
+                            locked
+                                ? 'opacity-30 cursor-not-allowed border-neutral-800 text-neutral-600'
+                                : active
+                                    ? 'bg-trakt-600 border-trakt-600 text-white'
+                                    : 'bg-neutral-800/60 border-neutral-700/50 text-neutral-400 hover:border-neutral-600 hover:text-neutral-200'
+                        }`}
+                    >
+                        <Icon name={def?.icon || 'Film'} size={13} />
+                        {def?.label || key}
+                    </button>
+                );
+            };
+
+            return (
+                <div className="space-y-6">
+                    {!hasGemini && (
+                        <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg px-4 py-3 text-xs text-amber-300">
+                            Add a Gemini API key above to unlock AI genre catalogs.
+                        </div>
+                    )}
+
+                    {/* AI Movie genres */}
+                    <div>
+                        <div className="flex items-center gap-2 mb-3">
+                            <Icon name="Film" size={14} className="text-trakt-400" />
+                            <p className="text-sm font-semibold text-neutral-200">AI Movie Picks</p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            {MOVIE_GENRE_KEYS.map(k => renderGenreChip(k, 'ai-movie'))}
+                        </div>
+                    </div>
+
+                    {/* AI Show genres */}
+                    <div>
+                        <div className="flex items-center gap-2 mb-3">
+                            <Icon name="Tv" size={14} className="text-trakt-400" />
+                            <p className="text-sm font-semibold text-neutral-200">AI Show Picks</p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            {SHOW_GENRE_KEYS.map(k => renderGenreChip(k, 'ai-show'))}
+                        </div>
+                    </div>
+
+                    {/* Utility catalogs */}
+                    <div>
+                        <div className="flex items-center gap-2 mb-3">
+                            <Icon name="List" size={14} className="text-neutral-400" />
+                            <p className="text-sm font-semibold text-neutral-200">Utility Catalogs</p>
+                        </div>
+                        <div className="space-y-1.5">
+                            {UTILITY_CATALOG_DEFS.map(cat => {
+                                const active = enabledCatalogs.includes(cat.id);
+                                return (
+                                    <button
+                                        key={cat.id}
+                                        onClick={() => toggleUtility(cat.id)}
+                                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border transition text-left ${
+                                            active
+                                                ? 'bg-neutral-700/60 border-neutral-600 text-neutral-200'
+                                                : 'bg-neutral-800/40 border-neutral-700/50 text-neutral-400 hover:bg-neutral-800'
+                                        }`}
+                                    >
+                                        <Icon name={cat.icon} size={14} className={active ? 'text-neutral-300' : 'text-neutral-500'} />
+                                        <div className="flex-1 min-w-0">
+                                            <span className="text-sm">{cat.name}</span>
+                                            <span className="text-xs text-neutral-500 ml-2">{cat.desc}</span>
+                                        </div>
+                                        <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${active ? 'bg-neutral-500 border-neutral-500' : 'border-neutral-600'}`}>
+                                            {active && <Icon name="Check" size={10} className="text-white" />}
+                                        </div>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
         // ─── Catalog Toggle List ────────────────────────────────────
         function CatalogToggleList({ enabledCatalogs, onChange, geminiKey }) {
             const dragItem     = useRef(null);
@@ -765,9 +888,9 @@
                         </div>
                     </div>
 
-                    <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4">
-                        <h3 className="text-sm font-medium text-neutral-300 mb-3">Choose your catalogs:</h3>
-                        <CatalogToggleList
+                    <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-5">
+                        <h3 className="text-sm font-medium text-neutral-300 mb-4">Choose your catalogs:</h3>
+                        <GenrePicker
                             enabledCatalogs={enabledCatalogs}
                             onChange={setEnabledCatalogs}
                             geminiKey={geminiKey}
@@ -958,10 +1081,8 @@
             }, [manifestUrl]);
 
             const tabs = [
-                { id: 'movies', label: 'Movies', icon: 'Film' },
-                { id: 'shows', label: 'Shows', icon: 'Tv' },
-                { id: 'search', label: 'Search & Rate', icon: 'Search' },
                 { id: 'catalogs', label: 'Catalogs', icon: 'LayoutGrid' },
+                { id: 'search', label: 'Search & Rate', icon: 'Search' },
             ];
 
             return (
@@ -1040,22 +1161,26 @@
                         ))}
                     </div>
 
-                    {activeTab === 'movies' && (
-                        <StepCurate clientId={clientId} tokens={tokens} mediaType="movie" />
-                    )}
-                    {activeTab === 'shows' && (
-                        <StepCurate clientId={clientId} tokens={tokens} mediaType="show" />
-                    )}
                     {activeTab === 'search' && (
                         <SearchTab clientId={clientId} tokens={tokens} />
                     )}
                     {activeTab === 'catalogs' && (
-                        <div className="space-y-4">
-                            <CatalogToggleList
+                        <div className="space-y-6">
+                            <GenrePicker
                                 enabledCatalogs={enabledCatalogs}
                                 onChange={onCatalogsChange}
                                 geminiKey={geminiKey}
                             />
+                            {enabledCatalogs.length > 0 && (
+                                <div>
+                                    <p className="text-xs font-medium text-neutral-400 uppercase tracking-wide mb-2">Reorder active catalogs</p>
+                                    <CatalogToggleList
+                                        enabledCatalogs={enabledCatalogs}
+                                        onChange={onCatalogsChange}
+                                        geminiKey={geminiKey}
+                                    />
+                                </div>
+                            )}
                             <p className="text-xs text-neutral-500 text-center">
                                 After changing catalogs, copy the updated manifest URL above and reinstall the addon in Stremio.
                             </p>
