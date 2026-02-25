@@ -22,6 +22,10 @@
     {
       "source": "/stremio/:config/meta/:type/:id.json",
       "destination": "/api/stremio/handler?config=:config&resource=meta&type=:type&id=:id"
+    },
+    {
+      "source": "/stremio/:config/stream/:type/:id.json",
+      "destination": "/api/stremio/handler?config=:config&resource=stream&type=:type&id=:id"
     }
   ],
   "headers": [

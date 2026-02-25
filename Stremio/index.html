@@ -341,8 +341,8 @@
             );
         }
 
-        // ─── Step 3: Browse & Curate ────────────────────────────────
-        function StepCurate({ clientId, tokens, onNext }) {
+        // ─── Step 3 / Manage: Browse & Curate ───────────────────────
+        function StepCurate({ clientId, tokens, onNext, mediaType = 'movie' }) {
             const [recommendations, setRecommendations] = useState([]);
             const [loading, setLoading] = useState(true);
             const [loadingMore, setLoadingMore] = useState(false);
@@ -353,7 +353,8 @@
 
             const fetchRecs = useCallback(async (pageNum) => {
                 try {
-                    const res = await fetch(`https://api.trakt.tv/recommendations/movies?limit=20&page=${pageNum}&extended=full`, {
+                    const endpoint = mediaType === 'show' ? 'shows' : 'movies';
+                    const res = await fetch(`https://api.trakt.tv/recommendations/${endpoint}?limit=20&page=${pageNum}&extended=full`, {
                         headers: {
                             'Content-Type': 'application/json',
                             'trakt-api-version': '2',
@@ -368,7 +369,7 @@
                 } catch {
                     return [];
                 }
-            }, [clientId, tokens.accessToken]);
+            }, [clientId, tokens.accessToken, mediaType]);
 
             useEffect(() => {
                 (async () => {
@@ -404,6 +405,7 @@
                             imdbId: movie.ids.imdb,
                             accessToken: tokens.accessToken,
                             clientId,
+                            mediaType,
                         }),
                     });
                     const data = await res.json();
@@ -431,17 +433,21 @@
 
                     <div className="flex items-center justify-between">
                         <div>
-                            <h2 className="text-lg font-semibold text-white">Your Recommendations</h2>
+                            <h2 className="text-lg font-semibold text-white">
+                                {mediaType === 'show' ? 'Show Recommendations' : 'Movie Recommendations'}
+                            </h2>
                             <p className="text-sm text-neutral-400 mt-1">
                                 Thumbs up adds to your watchlist. Thumbs down tells Trakt to improve suggestions.
                             </p>
                         </div>
-                        <button
-                            onClick={onNext}
-                            className="bg-trakt-600 hover:bg-trakt-700 text-white font-medium rounded-lg px-4 py-2 text-sm transition flex items-center gap-2 flex-shrink-0"
-                        >
-                            Install in Stremio <Icon name="ArrowRight" size={14} />
-                        </button>
+                        {onNext && (
+                            <button
+                                onClick={onNext}
+                                className="bg-trakt-600 hover:bg-trakt-700 text-white font-medium rounded-lg px-4 py-2 text-sm transition flex items-center gap-2 flex-shrink-0"
+                            >
+                                Install in Stremio <Icon name="ArrowRight" size={14} />
+                            </button>
+                        )}
                     </div>
 
                     {loading ? (
@@ -545,7 +551,7 @@
         }
 
         // ─── Step 4: Install ────────────────────────────────────────
-        function StepInstall({ clientId, clientSecret, tokens, onBack }) {
+        function StepInstall({ clientId, clientSecret, tokens, onBack, onManage }) {
             const [copied, setCopied] = useState(false);
             const [toast, setToast] = useState(null);
 
@@ -626,9 +632,10 @@
                         <h3 className="text-sm font-medium text-neutral-300 mb-2">Your catalogs in Stremio:</h3>
                         <div className="space-y-2">
                             {[
-                                { name: 'Recommended For You', desc: 'Personalized picks from your Trakt history', icon: 'Sparkles' },
-                                { name: 'Your Watchlist', desc: 'Movies you marked as interesting', icon: 'Bookmark' },
-                                { name: 'Trending on Trakt', desc: 'What everyone is watching right now', icon: 'TrendingUp' },
+                                { name: 'Recommended For You', desc: 'Personalized movie picks', icon: 'Sparkles' },
+                                { name: 'Recommended Shows', desc: 'Personalized show picks', icon: 'Tv' },
+                                { name: 'Your Watchlist', desc: 'Movies & shows you saved', icon: 'Bookmark' },
+                                { name: 'Trending on Trakt', desc: 'What everyone is watching', icon: 'TrendingUp' },
                             ].map(cat => (
                                 <div key={cat.name} className="flex items-center gap-3 p-2 rounded-lg bg-neutral-800/50">
                                     <div className="w-8 h-8 rounded-lg bg-trakt-500/10 flex items-center justify-center flex-shrink-0">
@@ -642,6 +649,246 @@
                             ))}
                         </div>
                     </div>
+
+                    <button
+                        onClick={onManage}
+                        className="w-full bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-medium rounded-lg px-4 py-3 text-sm transition flex items-center justify-center gap-2"
+                    >
+                        <Icon name="Settings" size={16} /> Continue to Manage & Curate
+                    </button>
+                </div>
+            );
+        }
+
+        // ─── Search Tab ─────────────────────────────────────────────
+        function SearchTab({ clientId, tokens }) {
+            const [query, setQuery] = useState('');
+            const [results, setResults] = useState([]);
+            const [loading, setLoading] = useState(false);
+            const [toast, setToast] = useState(null);
+            const [actionLoading, setActionLoading] = useState({});
+
+            const traktHeaders = {
+                'Content-Type': 'application/json',
+                'trakt-api-version': '2',
+                'trakt-api-key': clientId,
+                'Authorization': `Bearer ${tokens.accessToken}`,
+            };
+
+            const search = useCallback(async () => {
+                if (!query.trim()) return;
+                setLoading(true);
+                setResults([]);
+                try {
+                    const res = await fetch(
+                        `https://api.trakt.tv/search/movie,show?query=${encodeURIComponent(query.trim())}&extended=full&limit=20`,
+                        { headers: traktHeaders }
+                    );
+                    if (!res.ok) throw new Error('Search failed');
+                    const data = await res.json();
+                    setResults(data);
+                } catch {
+                    setToast({ message: 'Search failed. Try again.', type: 'error' });
+                } finally {
+                    setLoading(false);
+                }
+            }, [query, clientId, tokens.accessToken]);
+
+            const markWatched = useCallback(async (item) => {
+                const key = `watched-${item.type}-${item[item.type].ids.trakt}`;
+                setActionLoading(prev => ({ ...prev, [key]: true }));
+                try {
+                    const ids = item[item.type].ids;
+                    const body = item.type === 'show'
+                        ? { shows: [{ watched_at: new Date().toISOString(), ids }] }
+                        : { movies: [{ watched_at: new Date().toISOString(), ids }] };
+                    const res = await fetch('https://api.trakt.tv/sync/history', {
+                        method: 'POST', headers: traktHeaders, body: JSON.stringify(body),
+                    });
+                    setToast({ message: res.ok ? `Marked "${item[item.type].title}" as watched` : 'Failed', type: res.ok ? 'success' : 'error' });
+                } catch {
+                    setToast({ message: 'Failed to reach Trakt', type: 'error' });
+                } finally {
+                    setActionLoading(prev => ({ ...prev, [key]: false }));
+                }
+            }, [clientId, tokens.accessToken]);
+
+            const rateItem = useCallback(async (item, rating) => {
+                const key = `rate-${item.type}-${item[item.type].ids.trakt}`;
+                setActionLoading(prev => ({ ...prev, [key]: true }));
+                try {
+                    const ids = item[item.type].ids;
+                    const body = item.type === 'show'
+                        ? { shows: [{ rating, ids }] }
+                        : { movies: [{ rating, ids }] };
+                    const res = await fetch('https://api.trakt.tv/sync/ratings', {
+                        method: 'POST', headers: traktHeaders, body: JSON.stringify(body),
+                    });
+                    setToast({ message: res.ok ? `Rated "${item[item.type].title}" ${rating}/10` : 'Failed', type: res.ok ? 'success' : 'error' });
+                } catch {
+                    setToast({ message: 'Failed to reach Trakt', type: 'error' });
+                } finally {
+                    setActionLoading(prev => ({ ...prev, [key]: false }));
+                }
+            }, [clientId, tokens.accessToken]);
+
+            return (
+                <div className="space-y-4">
+                    {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+                    <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 space-y-3">
+                        <p className="text-xs text-neutral-400">Search for movies or shows you've watched to improve your recommendations.</p>
+                        <div className="flex gap-2">
+                            <input
+                                type="text"
+                                value={query}
+                                onChange={e => setQuery(e.target.value)}
+                                onKeyDown={e => e.key === 'Enter' && search()}
+                                placeholder="Search movies & shows..."
+                                className="flex-1 bg-neutral-800 border border-neutral-700 rounded-lg px-4 py-2.5 text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-trakt-500 focus:ring-1 focus:ring-trakt-500/30 transition"
+                            />
+                            <button
+                                onClick={search}
+                                disabled={!query.trim() || loading}
+                                className="bg-trakt-600 hover:bg-trakt-700 disabled:bg-neutral-700 disabled:text-neutral-500 text-white rounded-lg px-4 py-2.5 text-sm transition flex items-center gap-2"
+                            >
+                                {loading ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full spinner" /> : <Icon name="Search" size={16} />}
+                            </button>
+                        </div>
+                    </div>
+
+                    {results.map(item => {
+                        const media = item[item.type];
+                        const watchedKey = `watched-${item.type}-${media.ids.trakt}`;
+                        const rateKey = `rate-${item.type}-${media.ids.trakt}`;
+                        return (
+                            <div key={`${item.type}-${media.ids.trakt}`} className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 animate-fade-in">
+                                <div className="flex items-start gap-3 mb-3">
+                                    <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <h3 className="text-white font-medium text-sm truncate">{media.title}</h3>
+                                            {media.year && <span className="text-xs text-neutral-500">{media.year}</span>}
+                                            <span className={`px-1.5 py-0.5 text-xs rounded font-medium ${item.type === 'show' ? 'bg-blue-500/20 text-blue-400' : 'bg-purple-500/20 text-purple-400'}`}>
+                                                {item.type === 'show' ? 'Show' : 'Movie'}
+                                            </span>
+                                        </div>
+                                        {media.overview && <p className="text-xs text-neutral-500 line-clamp-2">{media.overview}</p>}
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        onClick={() => markWatched(item)}
+                                        disabled={actionLoading[watchedKey]}
+                                        className="flex-1 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 text-emerald-400 rounded-lg px-3 py-2 text-xs transition flex items-center justify-center gap-1.5"
+                                    >
+                                        {actionLoading[watchedKey] ? <div className="w-3 h-3 border border-emerald-400/30 border-t-emerald-400 rounded-full spinner" /> : <Icon name="Check" size={12} />}
+                                        Mark as Watched
+                                    </button>
+                                    <select
+                                        defaultValue=""
+                                        disabled={actionLoading[rateKey]}
+                                        onChange={e => { if (e.target.value) rateItem(item, parseInt(e.target.value)); e.target.value = ''; }}
+                                        className="bg-neutral-800 border border-neutral-700 text-neutral-300 rounded-lg px-2 py-2 text-xs focus:outline-none focus:border-trakt-500 transition"
+                                    >
+                                        <option value="" disabled>⭐ Rate</option>
+                                        {[10,9,8,7,6,5,4,3,2,1].map(n => <option key={n} value={n}>{n}/10</option>)}
+                                    </select>
+                                </div>
+                            </div>
+                        );
+                    })}
+
+                    {!loading && results.length === 0 && query && (
+                        <p className="text-center text-neutral-500 text-sm py-8">No results found.</p>
+                    )}
+                </div>
+            );
+        }
+
+        // ─── Step 5: Manage ─────────────────────────────────────────
+        function StepManage({ clientId, clientSecret, tokens, onReauth }) {
+            const [activeTab, setActiveTab] = useState('movies');
+            const [copied, setCopied] = useState(false);
+            const [toast, setToast] = useState(null);
+
+            const config = { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, clientId, clientSecret };
+            const configEncoded = encodeConfig(config);
+            const manifestUrl = `${window.location.origin}/stremio/${configEncoded}/manifest.json`;
+
+            const copyUrl = useCallback(() => {
+                navigator.clipboard.writeText(manifestUrl);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+            }, [manifestUrl]);
+
+            const tabs = [
+                { id: 'movies', label: 'Movies', icon: 'Film' },
+                { id: 'shows', label: 'Shows', icon: 'Tv' },
+                { id: 'search', label: 'Search & Rate', icon: 'Search' },
+            ];
+
+            return (
+                <div className="space-y-6 animate-fade-in">
+                    {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+
+                    {/* Header */}
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <h1 className="text-xl font-bold text-white">Trakt Recommendations</h1>
+                            <p className="text-sm text-neutral-400 mt-0.5">Curate your recommendations</p>
+                        </div>
+                        <button
+                            onClick={onReauth}
+                            className="text-neutral-500 hover:text-red-400 text-xs flex items-center gap-1 transition"
+                        >
+                            <Icon name="LogOut" size={14} /> Re-authorize
+                        </button>
+                    </div>
+
+                    {/* Manifest URL */}
+                    <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 space-y-2">
+                        <p className="text-xs text-neutral-400 font-medium">Addon manifest URL</p>
+                        <div className="relative">
+                            <input
+                                type="text"
+                                readOnly
+                                value={manifestUrl}
+                                className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2 pr-16 text-xs text-neutral-300 font-mono"
+                                onClick={e => e.target.select()}
+                            />
+                            <button
+                                onClick={copyUrl}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 bg-neutral-700 hover:bg-neutral-600 text-white rounded px-2 py-1 text-xs transition flex items-center gap-1"
+                            >
+                                <Icon name={copied ? 'Check' : 'Copy'} size={11} />
+                                {copied ? 'Copied' : 'Copy'}
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Tabs */}
+                    <div className="flex gap-1 bg-neutral-900 border border-neutral-800 rounded-xl p-1">
+                        {tabs.map(tab => (
+                            <button
+                                key={tab.id}
+                                onClick={() => setActiveTab(tab.id)}
+                                className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition ${
+                                    activeTab === tab.id ? 'bg-trakt-600 text-white' : 'text-neutral-400 hover:text-neutral-200'
+                                }`}
+                            >
+                                <Icon name={tab.icon} size={14} /> {tab.label}
+                            </button>
+                        ))}
+                    </div>
+
+                    {activeTab === 'movies' && (
+                        <StepCurate clientId={clientId} tokens={tokens} mediaType="movie" />
+                    )}
+                    {activeTab === 'shows' && (
+                        <StepCurate clientId={clientId} tokens={tokens} mediaType="show" />
+                    )}
+                    {activeTab === 'search' && (
+                        <SearchTab clientId={clientId} tokens={tokens} />
+                    )}
                 </div>
             );
         }
@@ -652,6 +899,54 @@
             const [clientId, setClientId] = useState('');
             const [clientSecret, setClientSecret] = useState('');
             const [tokens, setTokens] = useState(null);
+
+            // Load saved config from localStorage on mount
+            useEffect(() => {
+                try {
+                    const saved = JSON.parse(localStorage.getItem('trakt_config') || 'null');
+                    if (saved && saved.accessToken && saved.clientId) {
+                        setClientId(saved.clientId);
+                        setClientSecret(saved.clientSecret || '');
+                        setTokens({ accessToken: saved.accessToken, refreshToken: saved.refreshToken });
+                        setStep(5);
+                    }
+                } catch {}
+            }, []);
+
+            const handleAuthComplete = useCallback((t) => {
+                try {
+                    localStorage.setItem('trakt_config', JSON.stringify({
+                        clientId, clientSecret,
+                        accessToken: t.accessToken,
+                        refreshToken: t.refreshToken,
+                    }));
+                } catch {}
+                setTokens(t);
+                setStep(3);
+            }, [clientId, clientSecret]);
+
+            const handleReauth = useCallback(() => {
+                try { localStorage.removeItem('trakt_config'); } catch {}
+                setTokens(null);
+                setClientId('');
+                setClientSecret('');
+                setStep(1);
+            }, []);
+
+            if (step === 5 && tokens) {
+                return (
+                    <div className="min-h-screen flex items-start justify-center p-4 pt-8">
+                        <div className="w-full max-w-2xl">
+                            <StepManage
+                                clientId={clientId}
+                                clientSecret={clientSecret}
+                                tokens={tokens}
+                                onReauth={handleReauth}
+                            />
+                        </div>
+                    </div>
+                );
+            }
 
             return (
                 <div className="min-h-screen flex items-start justify-center p-4 pt-12">
@@ -680,7 +975,7 @@
                             <StepAuth
                                 clientId={clientId}
                                 clientSecret={clientSecret}
-                                onNext={(t) => { setTokens(t); setStep(3); }}
+                                onNext={handleAuthComplete}
                                 onBack={() => setStep(1)}
                             />
                         )}
@@ -699,6 +994,7 @@
                                 clientSecret={clientSecret}
                                 tokens={tokens}
                                 onBack={() => setStep(3)}
+                                onManage={() => setStep(5)}
                             />
                         )}
                     </div>

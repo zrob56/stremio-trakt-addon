@@ -1,15 +1,9 @@
 const TRAKT_BASE = 'https://api.trakt.tv';
 
-function corsHeaders() {
-  return {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
-  };
-}
-
 function setCors(res) {
-  Object.entries(corsHeaders()).forEach(([k, v]) => res.setHeader(k, v));
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
 function traktHeaders(clientId, accessToken) {
@@ -21,19 +15,23 @@ function traktHeaders(clientId, accessToken) {
   };
 }
 
-async function handleThumbsUp(traktId, imdbId, accessToken, clientId) {
+async function handleThumbsUp(traktId, imdbId, accessToken, clientId, mediaType) {
+  const body = mediaType === 'show'
+    ? { shows: [{ ids: { trakt: traktId, imdb: imdbId } }] }
+    : { movies: [{ ids: { trakt: traktId, imdb: imdbId } }] };
   const response = await fetch(`${TRAKT_BASE}/sync/watchlist`, {
     method: 'POST',
     headers: traktHeaders(clientId, accessToken),
-    body: JSON.stringify({
-      movies: [{ ids: { trakt: traktId, imdb: imdbId } }],
-    }),
+    body: JSON.stringify(body),
   });
   return response.ok;
 }
 
-async function handleThumbsDown(traktId, accessToken, clientId) {
-  const response = await fetch(`${TRAKT_BASE}/recommendations/movies/${traktId}`, {
+async function handleThumbsDown(traktId, accessToken, clientId, mediaType) {
+  const endpoint = mediaType === 'show'
+    ? `${TRAKT_BASE}/recommendations/shows/${traktId}`
+    : `${TRAKT_BASE}/recommendations/movies/${traktId}`;
+  const response = await fetch(endpoint, {
     method: 'DELETE',
     headers: traktHeaders(clientId, accessToken),
   });
@@ -51,7 +49,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { action, traktId, imdbId, accessToken, clientId } = req.body || {};
+  const { action, traktId, imdbId, accessToken, clientId, mediaType = 'movie' } = req.body || {};
 
   if (!action || !traktId || !accessToken || !clientId) {
     return res.status(400).json({ error: 'Missing required fields: action, traktId, accessToken, clientId' });
@@ -59,11 +57,11 @@ export default async function handler(req, res) {
 
   try {
     if (action === 'thumbsUp') {
-      const ok = await handleThumbsUp(traktId, imdbId, accessToken, clientId);
+      const ok = await handleThumbsUp(traktId, imdbId, accessToken, clientId, mediaType);
       return res.json({ success: ok, message: ok ? 'Added to watchlist' : 'Failed to add' });
     }
     if (action === 'thumbsDown') {
-      const ok = await handleThumbsDown(traktId, accessToken, clientId);
+      const ok = await handleThumbsDown(traktId, accessToken, clientId, mediaType);
       return res.json({ success: ok, message: ok ? 'Dismissed from recommendations' : 'Failed to dismiss' });
     }
     return res.status(400).json({ error: 'Invalid action. Use thumbsUp or thumbsDown' });
