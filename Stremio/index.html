@@ -1112,7 +1112,7 @@
             const [geminiKey, setGeminiKey] = useState(initialGeminiKey || '');
             const [geminiSaved, setGeminiSaved] = useState(false);
             const [customInstructions, setCustomInstructions] = useState(initialCustomInstructions || '');
-            const [feedingData, setFeedingData] = useState([]);
+            const [feedingData, setFeedingData] = useState({ rated: [], watched: [], watchlist: [] });
             const [feedingOpen, setFeedingOpen] = useState(false);
             const [feedingLoaded, setFeedingLoaded] = useState(false);
 
@@ -1141,22 +1141,34 @@
             const loadFeedingData = useCallback(async () => {
                 if (feedingLoaded) return;
                 setFeedingLoaded(true);
+                const h = {
+                    'Content-Type': 'application/json',
+                    'trakt-api-version': '2',
+                    'trakt-api-key': clientId,
+                    'Authorization': `Bearer ${tokens.accessToken}`,
+                };
                 try {
-                    const res = await fetch('https://api.trakt.tv/users/me/ratings/movies?limit=100&extended=full', {
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'trakt-api-version': '2',
-                            'trakt-api-key': clientId,
-                            'Authorization': `Bearer ${tokens.accessToken}`,
-                        },
-                    });
-                    if (!res.ok) return;
-                    const data = await res.json();
-                    setFeedingData(
-                        data.filter(r => r.rating >= 7)
+                    const [ratingsRes, watchedRes, watchlistRes] = await Promise.all([
+                        fetch('https://api.trakt.tv/users/me/ratings/movies?limit=100&extended=full', { headers: h }),
+                        fetch('https://api.trakt.tv/users/me/watched/movies?limit=100', { headers: h }),
+                        fetch('https://api.trakt.tv/sync/watchlist/movies?limit=100&extended=full', { headers: h }),
+                    ]);
+                    const ratingsData  = ratingsRes.ok  ? await ratingsRes.json()  : [];
+                    const watchedData  = watchedRes.ok  ? await watchedRes.json()  : [];
+                    const watchlistData = watchlistRes.ok ? await watchlistRes.json() : [];
+
+                    const ratedTitles = new Set(ratingsData.map(r => r.movie.title));
+                    setFeedingData({
+                        rated: ratingsData
+                            .filter(r => r.rating >= 7)
                             .sort((a, b) => b.rating - a.rating)
-                            .map(r => ({ title: r.movie.title, year: r.movie.year, rating: r.rating }))
-                    );
+                            .map(r => ({ title: r.movie.title, year: r.movie.year, rating: r.rating })),
+                        watched: watchedData
+                            .filter(w => !ratedTitles.has(w.movie.title))
+                            .map(w => ({ title: w.movie.title, year: w.movie.year })),
+                        watchlist: watchlistData
+                            .map(w => ({ title: w.movie.title, year: w.movie.year })),
+                    });
                 } catch {}
             }, [clientId, tokens.accessToken, feedingLoaded]);
 
@@ -1284,18 +1296,35 @@
                                 >
                                     <Icon name={feedingOpen ? 'ChevronDown' : 'ChevronRight'} size={12} />
                                     What's feeding the AI
-                                    {feedingData.length > 0 && <span className="text-neutral-600 font-normal">({feedingData.length} titles)</span>}
+                                    {(feedingData.rated.length + feedingData.watched.length + feedingData.watchlist.length) > 0 && (
+                                        <span className="text-neutral-600 font-normal">({feedingData.rated.length + feedingData.watched.length + feedingData.watchlist.length} titles)</span>
+                                    )}
                                 </button>
                                 {feedingOpen && (
-                                    <div className="mt-3 space-y-1 max-h-52 overflow-y-auto">
-                                        {feedingData.length === 0 ? (
-                                            <p className="text-xs text-neutral-600 text-center py-4">No highly-rated movies found yet.</p>
-                                        ) : feedingData.map((item, i) => (
-                                            <div key={i} className="flex items-center justify-between px-2 py-1.5 rounded bg-neutral-800/50 text-xs">
-                                                <span className="text-neutral-300 truncate">{item.title} <span className="text-neutral-600">({item.year})</span></span>
-                                                <span className="text-amber-400 flex-shrink-0 ml-3 font-medium">{item.rating}/10</span>
+                                    <div className="mt-3 space-y-4 max-h-72 overflow-y-auto">
+                                        {[
+                                            { label: 'Highly rated', icon: 'Star', items: feedingData.rated, renderRight: item => <span className="text-amber-400 flex-shrink-0 ml-3 font-medium">{item.rating}/10</span> },
+                                            { label: 'Watch history', icon: 'Eye', items: feedingData.watched, renderRight: () => null },
+                                            { label: 'Watchlist', icon: 'Bookmark', items: feedingData.watchlist, renderRight: () => null },
+                                        ].map(({ label, icon, items, renderRight }) => items.length > 0 && (
+                                            <div key={label}>
+                                                <div className="flex items-center gap-1.5 mb-1.5">
+                                                    <Icon name={icon} size={11} className="text-neutral-500" />
+                                                    <span className="text-xs font-medium text-neutral-500 uppercase tracking-wide">{label} ({items.length})</span>
+                                                </div>
+                                                <div className="space-y-1">
+                                                    {items.map((item, i) => (
+                                                        <div key={i} className="flex items-center justify-between px-2 py-1.5 rounded bg-neutral-800/50 text-xs">
+                                                            <span className="text-neutral-300 truncate">{item.title} <span className="text-neutral-600">({item.year})</span></span>
+                                                            {renderRight(item)}
+                                                        </div>
+                                                    ))}
+                                                </div>
                                             </div>
                                         ))}
+                                        {(feedingData.rated.length + feedingData.watched.length + feedingData.watchlist.length) === 0 && (
+                                            <p className="text-xs text-neutral-600 text-center py-4">Nothing found yet.</p>
+                                        )}
                                     </div>
                                 )}
                             </div>

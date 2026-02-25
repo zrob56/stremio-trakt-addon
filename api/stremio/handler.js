@@ -159,18 +159,23 @@ async function handleAICatalog(config, mediaType, genreKey, res) {
 
   if (topRated.length === 0) return res.json({ metas: [] });
 
-  // Fetch watched history to exclude from recommendations
+  // Fetch watched history — used as both positive signal and exclusion list
   const watchedUrl = isShow
-    ? `${TRAKT_BASE}/users/me/watched/shows?limit=50`
-    : `${TRAKT_BASE}/users/me/watched/movies?limit=50`;
+    ? `${TRAKT_BASE}/users/me/watched/shows?limit=100`
+    : `${TRAKT_BASE}/users/me/watched/movies?limit=100`;
   let watchedTitles = [];
   try {
     const watchedRaw = await traktFetch(watchedUrl, headers);
     watchedTitles = watchedRaw.map(w => isShow ? w.show.title : w.movie.title);
   } catch { /* non-fatal */ }
 
-  const ratedList    = topRated.map(m => `- ${m.title} (${m.year})`).join('\n');
-  const watchedList  = watchedTitles.slice(0, 30).map(t => `- ${t}`).join('\n') || 'None';
+  // Watched-but-not-rated = secondary positive signal (user watched it, implied interest)
+  const ratedTitleSet = new Set([...topRated.map(t => t.title), ...disliked.map(d => d.title)]);
+  const watchedNotRated = watchedTitles.filter(t => !ratedTitleSet.has(t)).slice(0, 40);
+
+  const ratedList    = topRated.map(m => `- ${m.title} (${m.year})`).join('\n') || 'None';
+  const watchedList  = watchedNotRated.map(t => `- ${t}`).join('\n') || 'None';
+  const allSeenList  = [...topRated.map(t => t.title), ...watchedTitles].slice(0, 60).map(t => `- ${t}`).join('\n') || 'None';
   const dislikedList = disliked.map(m => `- ${m.title} (${m.year})`).join('\n') || 'None';
   const mediaLabel   = isShow ? 'TV shows' : 'movies';
   const genreLabel   = GENRE_LABELS[genreKey] || null;
@@ -179,7 +184,7 @@ async function handleAICatalog(config, mediaType, genreKey, res) {
     ? `\n\nAdditional instructions from the user: ${config.customInstructions.trim()}`
     : '';
 
-  const prompt = `You are a ${mediaLabel} recommendation engine.\n\nThe user has rated these ${mediaLabel} highly (7-10/10):\n${ratedList}\n\nThey have already watched these (do NOT recommend any of these):\n${watchedList}\n\nThe user disliked these (rated 1-6/10) — avoid recommending anything similar in tone, genre, or style:\n${dislikedList}\n\nRecommend exactly 20 ${mediaLabel}${genreClause} they would likely enjoy that are NOT in either list above. Focus on similar themes, tone, directors, or genres.${customClause}\nReturn ONLY a valid JSON array, no other text:\n[{"title": "Title Here", "year": 2020}, ...]`;
+  const prompt = `You are a ${mediaLabel} recommendation engine.\n\nThe user has rated these ${mediaLabel} highly (7-10/10):\n${ratedList}\n\nThey have also watched these (treat as enjoyed — use as positive signal):\n${watchedList}\n\nDo NOT recommend anything from either list above (already seen):\n${allSeenList}\n\nThe user disliked these (rated 1-6/10) — avoid anything similar in tone, genre, or style:\n${dislikedList}\n\nRecommend exactly 20 ${mediaLabel}${genreClause} they would likely enjoy that are NOT in the already-seen list. Focus on similar themes, tone, directors, or genres.${customClause}\nReturn ONLY a valid JSON array, no other text:\n[{"title": "Title Here", "year": 2020}, ...]`;
 
   // Call Gemini
   const geminiRes = await fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
