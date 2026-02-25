@@ -106,6 +106,15 @@ export default async function handler(req, res) {
       return res.status(500).send(htmlPage('Failed', '❌', 'Could not dismiss. Try again.', '#ef4444'));
     }
 
+    if (action === 'unwatchlist') {
+      const body = type === 'show'
+        ? { shows: [{ ids: { trakt: traktId, imdb: imdbId } }] }
+        : { movies: [{ ids: { trakt: traktId, imdb: imdbId } }] };
+      const r = await fetch(`${TRAKT_BASE}/sync/watchlist/remove`, { method: 'POST', headers, body: JSON.stringify(body) });
+      if (r.ok) return res.send(htmlPage('Removed from Watchlist', '🗑️', 'Removed from your Trakt watchlist.', '#6366f1'));
+      return res.status(500).send(htmlPage('Failed', '❌', 'Could not remove. Try again.', '#ef4444'));
+    }
+
     return res.status(400).send(htmlPage('Unknown Action', '⚠️', 'Invalid action requested.', '#f59e0b'));
   } catch {
     return res.status(502).send(htmlPage('Connection Error', '❌', 'Could not reach Trakt API. Please try again.', '#ef4444'));

@@ -13,7 +13,8 @@ function setCors(res) {
 }
 
 async function handleStart(req, res) {
-  const { clientId } = req.body || {};
+  const { clientId: bodyClientId } = req.body || {};
+  const clientId = bodyClientId || process.env.TRAKT_CLIENT_ID;
   if (!clientId) {
     return res.status(400).json({ error: 'clientId is required' });
   }
@@ -36,8 +37,8 @@ async function handleStart(req, res) {
 
 async function handlePoll(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
-  const clientId = url.searchParams.get('clientId');
-  const clientSecret = url.searchParams.get('clientSecret');
+  const clientId = url.searchParams.get('clientId') || process.env.TRAKT_CLIENT_ID;
+  const clientSecret = url.searchParams.get('clientSecret') || process.env.TRAKT_CLIENT_SECRET;
   const deviceCode = url.searchParams.get('deviceCode');
 
   if (!clientId || !deviceCode) {

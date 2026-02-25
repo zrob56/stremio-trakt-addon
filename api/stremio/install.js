@@ -31,8 +31,8 @@ export default async function handler(req, res) {
     enabledCatalogs, customInstructions, excludedFromFeed,
   } = req.body || {};
 
-  if (!clientId || !accessToken || !refreshToken) {
-    return res.status(400).json({ error: 'Missing required fields: clientId, accessToken, refreshToken' });
+  if ((!clientId && !process.env.TRAKT_CLIENT_ID) || !accessToken || !refreshToken) {
+    return res.status(400).json({ error: 'Missing required fields: accessToken, refreshToken (and clientId if no shared app configured)' });
   }
 
   let redis;
@@ -43,8 +43,8 @@ export default async function handler(req, res) {
   }
 
   const config = {
-    clientId,
-    clientSecret: clientSecret || '',
+    // Only store clientId/clientSecret if user provided their own (not relying on shared env vars)
+    ...(clientId ? { clientId, clientSecret: clientSecret || '' } : {}),
     ...(geminiKey ? { geminiKey } : {}),
     accessToken,
     refreshToken,

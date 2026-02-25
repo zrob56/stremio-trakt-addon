@@ -52,6 +52,15 @@ async function saveRefreshedConfig(uuid, newConfig) {
   } catch { /* non-fatal — request already succeeded */ }
 }
 
+async function checkRateLimit(uuid) {
+  const redis = getRedis();
+  if (!redis) return false;
+  const key = `rl:${uuid}:${Math.floor(Date.now() / 60000)}`;
+  const count = await redis.incr(key);
+  if (count === 1) await redis.expire(key, 60);
+  return count > 100;
+}
+
 function setCors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -72,7 +81,7 @@ function traktHeaders(clientId, accessToken) {
   return {
     'Content-Type': 'application/json',
     'trakt-api-version': '2',
-    'trakt-api-key': clientId,
+    'trakt-api-key': clientId || process.env.TRAKT_CLIENT_ID,
     'Authorization': `Bearer ${accessToken}`,
     'User-Agent': 'stremio-trakt-addon/1.0',
   };
@@ -91,8 +100,8 @@ async function refreshToken(config) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       refresh_token: config.refreshToken,
-      client_id: config.clientId,
-      client_secret: config.clientSecret || '',
+      client_id: config.clientId || process.env.TRAKT_CLIENT_ID,
+      client_secret: config.clientSecret || process.env.TRAKT_CLIENT_SECRET || '',
       redirect_uri: 'urn:ietf:wg:oauth:2.0:oob',
       grant_type: 'refresh_token',
     }),
@@ -168,7 +177,7 @@ function handleManifest(config, res) {
     name: 'Trakt Recommendations',
     description: 'AI-powered movie & show recommendations by genre, powered by your Trakt history.',
     logo: 'https://www.cnet.com/a/img/resize/0e9874cc9d6b18489f832793796d285141496106/hub/2021/10/16/11804578-0dbc-42af-bcd1-3bc7b1394962/the-batman-2022-teaser-poster-batman-01-promo.jpg?auto=webp&fit=bounds&height=900&precrop=1881,1411,x423,y0&width=1200',
-    resources: ['catalog'],
+    resources: ['catalog', 'meta'],
     types: ['movie', 'series'],
     catalogs,
     behaviorHints: { configurable: true },
@@ -184,7 +193,16 @@ function rpdbPoster(imdbId) {
   return `https://api.ratingposterdb.com/${RPDB_FREE_KEY}/imdb/poster-default/${imdbId}.jpg`;
 }
 
-async function handleAICatalog(config, mediaType, genreKey, res) {
+async function handleAICatalog(config, mediaType, genreKey, res, uuid = null) {
+  const redis = uuid ? getRedis() : null;
+  const cacheKey = uuid ? `ai:${uuid}:ai-${mediaType === 'series' ? 'show' : 'movie'}-${genreKey}` : null;
+  if (redis && cacheKey) {
+    try {
+      const cached = await redis.get(cacheKey);
+      if (cached) return res.json({ metas: typeof cached === 'string' ? JSON.parse(cached) : cached });
+    } catch { /* non-fatal */ }
+  }
+
   const headers = traktHeaders(config.clientId, config.accessToken);
   const isShow = mediaType === 'series';
 
@@ -291,14 +309,27 @@ async function handleAICatalog(config, mediaType, genreKey, res) {
     .filter(r => r.status === 'fulfilled' && r.value)
     .map(r => r.value);
 
+  if (redis && cacheKey && metas.length > 0) {
+    try { await redis.set(cacheKey, JSON.stringify(metas), { ex: 86400 }); } catch { /* non-fatal */ }
+  }
+
   res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
   return res.json({ metas });
 }
 
 // ── AI Search ─────────────────────────────────────────────────
 
-async function handleAISearch(config, mediaType, query, res) {
+async function handleAISearch(config, mediaType, query, res, uuid = null) {
   if (!query?.trim()) return res.json({ metas: [] });
+
+  const redis = uuid ? getRedis() : null;
+  const cacheKey = uuid ? `ai-search:${uuid}:${query.trim().toLowerCase()}` : null;
+  if (redis && cacheKey) {
+    try {
+      const cached = await redis.get(cacheKey);
+      if (cached) return res.json({ metas: typeof cached === 'string' ? JSON.parse(cached) : cached });
+    } catch { /* non-fatal */ }
+  }
 
   const isShow = mediaType === 'series';
   const mediaLabel = isShow ? 'TV shows' : 'movies';
@@ -349,13 +380,104 @@ async function handleAISearch(config, mediaType, query, res) {
   );
 
   const metas = lookups.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
+
+  if (redis && cacheKey && metas.length > 0) {
+    try { await redis.set(cacheKey, JSON.stringify(metas), { ex: 3600 }); } catch { /* non-fatal */ }
+  }
+
   res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
   return res.json({ metas });
 }
 
+// ── Meta ──────────────────────────────────────────────────────
+
+async function handleMeta(config, type, id, res) {
+  const imdbId = id;
+  const traktType = type === 'series' ? 'show' : 'movie';
+
+  // Check Redis cache
+  const redis = getRedis();
+  const cacheKey = `meta:${imdbId}:${traktType}`;
+  if (redis) {
+    try {
+      const cached = await redis.get(cacheKey);
+      if (cached) {
+        res.setHeader('Cache-Control', 'public, s-maxage=604800');
+        return res.json({ meta: typeof cached === 'string' ? JSON.parse(cached) : cached });
+      }
+    } catch { /* non-fatal */ }
+  }
+
+  const headers = traktHeaders(config.clientId, config.accessToken);
+
+  // Look up by IMDB ID to get Trakt slug
+  let slug;
+  try {
+    const searchRes = await fetch(`${TRAKT_BASE}/search/imdb/${imdbId}?type=${traktType}`, { headers });
+    if (!searchRes.ok) return res.json({ meta: null });
+    const searchData = await searchRes.json();
+    if (!searchData?.length) return res.json({ meta: null });
+    slug = searchData[0][traktType]?.ids?.slug;
+    if (!slug) return res.json({ meta: null });
+  } catch {
+    return res.json({ meta: null });
+  }
+
+  // Parallel: detail + people
+  let detail, peopleData;
+  try {
+    const [detailRes, peopleRes] = await Promise.all([
+      fetch(`${TRAKT_BASE}/${traktType}s/${slug}?extended=full`, { headers }),
+      fetch(`${TRAKT_BASE}/${traktType}s/${slug}/people`, { headers }),
+    ]);
+    detail = detailRes.ok ? await detailRes.json() : null;
+    peopleData = peopleRes.ok ? await peopleRes.json() : null;
+  } catch {
+    return res.json({ meta: null });
+  }
+
+  if (!detail) return res.json({ meta: null });
+
+  const cast = (peopleData?.cast || []).slice(0, 5).map(c => c.person?.name).filter(Boolean);
+  const directors = (peopleData?.crew?.directing || [])
+    .filter(c => c.jobs?.includes('Director'))
+    .slice(0, 2)
+    .map(c => c.person?.name)
+    .filter(Boolean);
+
+  // Extract YouTube trailer ID if present
+  let trailers;
+  if (detail.trailer) {
+    const ytMatch = detail.trailer.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\s]+)/);
+    if (ytMatch) trailers = [{ source: 'yt', key: ytMatch[1] }];
+  }
+
+  const meta = {
+    id: imdbId,
+    type,
+    name: detail.title,
+    description: detail.overview || undefined,
+    releaseInfo: detail.year ? String(detail.year) : undefined,
+    imdbRating: detail.rating ? detail.rating.toFixed(1) : undefined,
+    poster: rpdbPoster(imdbId),
+    genres: detail.genres || undefined,
+    cast: cast.length > 0 ? cast : undefined,
+    ...(traktType === 'movie' && directors.length > 0 ? { director: directors } : {}),
+    ...(traktType === 'movie' && detail.runtime ? { runtime: `${detail.runtime} min` } : {}),
+    ...(trailers ? { trailers } : {}),
+  };
+
+  if (redis) {
+    try { await redis.set(cacheKey, JSON.stringify(meta), { ex: 604800 }); } catch { /* non-fatal */ }
+  }
+
+  res.setHeader('Cache-Control', 'public, s-maxage=604800');
+  return res.json({ meta });
+}
+
 // ── Catalog ───────────────────────────────────────────────────
 
-async function handleCatalog(config, type, id, extra, res) {
+async function handleCatalog(config, type, id, extra, res, uuid = null) {
   const params = parseExtra(extra);
   const page = Math.floor((parseInt(params.skip) || 0) / 20) + 1;
   const headers = traktHeaders(config.clientId, config.accessToken);
@@ -444,12 +566,12 @@ async function handleCatalog(config, type, id, extra, res) {
     }
     default: {
       if (id.startsWith('ai-') && config.geminiKey) {
-        if (id === 'ai-search-movie')  return handleAISearch(config, 'movie',  params.search, res);
-        if (id === 'ai-search-series') return handleAISearch(config, 'series', params.search, res);
+        if (id === 'ai-search-movie')  return handleAISearch(config, 'movie',  params.search, res, uuid);
+        if (id === 'ai-search-series') return handleAISearch(config, 'series', params.search, res, uuid);
         const parts = id.split('-');
         const aiMediaType = parts[1] === 'show' ? 'series' : parts[1];
         const genreKey = parts[2] || 'overall';
-        return await handleAICatalog(config, aiMediaType, genreKey, res);
+        return await handleAICatalog(config, aiMediaType, genreKey, res, uuid);
       }
       return res.json({ metas: [] });
     }
@@ -493,13 +615,18 @@ export default async function handler(req, res) {
 
   if (resource === 'manifest') return handleManifest(config, res);
 
-  if (!config || !config.accessToken || !config.clientId) {
+  if (uuid) {
+    const limited = await checkRateLimit(uuid);
+    if (limited) return res.status(429).json({ error: 'Rate limit exceeded' });
+  }
+
+  if (!config || !config.accessToken || (!config.clientId && !process.env.TRAKT_CLIENT_ID)) {
     return res.status(400).json({ metas: [] });
   }
 
   if (resource === 'catalog') {
     try {
-      return await handleCatalog(config, type, id, extra, res);
+      return await handleCatalog(config, type, id, extra, res, uuid);
     } catch (err) {
       if (err instanceof TraktAuthError && config.refreshToken) {
         const newConfig = await refreshToken(config);
@@ -507,7 +634,7 @@ export default async function handler(req, res) {
           // Persist the new tokens so subsequent requests don't loop on refresh
           await saveRefreshedConfig(uuid, newConfig);
           try {
-            return await handleCatalog(newConfig, type, id, extra, res);
+            return await handleCatalog(newConfig, type, id, extra, res, uuid);
           } catch {
             return res.json({ metas: [] });
           }
@@ -517,7 +644,13 @@ export default async function handler(req, res) {
     }
   }
 
-  if (resource === 'meta') return res.json({ meta: null });
+  if (resource === 'meta') {
+    try {
+      return await handleMeta(config, type, id, res);
+    } catch {
+      return res.json({ meta: null });
+    }
+  }
 
   return res.status(404).json({ error: 'Not found' });
 }
