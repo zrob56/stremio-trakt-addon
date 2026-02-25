@@ -703,41 +703,45 @@
 
         // ─── Catalog Toggle List ────────────────────────────────────
         function CatalogToggleList({ enabledCatalogs, onChange, geminiKey }) {
-            const dragFrom = useRef(null);
-            const dragTo   = useRef(null);
-            const [draggingIdx, setDraggingIdx] = useState(null);
-            const [overIdx, setOverIdx]         = useState(null);
+            const dragId  = useRef(null);   // ID of item being dragged
+            const dropId  = useRef(null);   // ID of item currently hovered
+            const [draggingId, setDraggingId] = useState(null);
+            const [overId, setOverId]         = useState(null);
             const enabledRef = useRef(enabledCatalogs);
             useEffect(() => { enabledRef.current = enabledCatalogs; }, [enabledCatalogs]);
 
             const activeCatalogs    = enabledCatalogs.map(id => CATALOG_DEFS.find(c => c.id === id)).filter(Boolean);
             const availableCatalogs = CATALOG_DEFS.filter(c => !enabledCatalogs.includes(c.id));
 
-            const handleDragStart = (e, i) => {
-                dragFrom.current = i;
-                dragTo.current   = i;
+            const handleDragStart = (e, id) => {
+                dragId.current = id;
+                dropId.current = id;
                 e.dataTransfer.effectAllowed = 'move';
-                setDraggingIdx(i);
+                setTimeout(() => setDraggingId(id), 0);
             };
-            const handleDragOver = (e, i) => {
+            const handleDragOver = (e, id) => {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = 'move';
-                dragTo.current = i;
-                setOverIdx(i);
+                dropId.current = id;
+                setOverId(id);
             };
             const handleDragEnd = () => {
-                const from = dragFrom.current;
-                const to   = dragTo.current;
-                if (from !== null && to !== null && from !== to) {
-                    const list = [...enabledRef.current];
-                    const [dragged] = list.splice(from, 1);
-                    list.splice(to, 0, dragged);
-                    onChange(list);
+                const fromId = dragId.current;
+                const toId   = dropId.current;
+                if (fromId && toId && fromId !== toId) {
+                    const list     = [...enabledRef.current];
+                    const fromIdx  = list.indexOf(fromId);
+                    const toIdx    = list.indexOf(toId);
+                    if (fromIdx !== -1 && toIdx !== -1) {
+                        const [item] = list.splice(fromIdx, 1);
+                        list.splice(toIdx, 0, item);
+                        onChange(list);
+                    }
                 }
-                dragFrom.current = null;
-                dragTo.current   = null;
-                setDraggingIdx(null);
-                setOverIdx(null);
+                dragId.current = null;
+                dropId.current = null;
+                setDraggingId(null);
+                setOverId(null);
             };
 
             const disable = (id) => onChange(prev => prev.filter(x => x !== id));
@@ -754,22 +758,19 @@
                             <p className="text-xs text-neutral-600 py-3 text-center border border-dashed border-neutral-800 rounded-lg">No catalogs selected</p>
                         ) : (
                             <div className="space-y-1.5">
-                                {activeCatalogs.map((cat, i) => {
-                                    const isDragging = draggingIdx === i;
-                                    const isOver = overIdx === i && draggingIdx !== null && draggingIdx !== i;
-                                    const insertBefore = isOver && draggingIdx > i;
-                                    const insertAfter  = isOver && draggingIdx < i;
+                                {activeCatalogs.map((cat) => {
+                                    const isDragging = draggingId === cat.id;
+                                    const isOver     = overId === cat.id && draggingId !== null && draggingId !== cat.id;
                                     return (
                                         <div
                                             key={cat.id}
                                             draggable
-                                            onDragStart={e => handleDragStart(e, i)}
-                                            onDragOver={e => handleDragOver(e, i)}
+                                            onDragStart={e => handleDragStart(e, cat.id)}
+                                            onDragOver={e => handleDragOver(e, cat.id)}
                                             onDragEnd={handleDragEnd}
                                             className={`flex items-center gap-3 p-3 rounded-lg border transition select-none
                                                 ${isDragging ? 'opacity-40 bg-neutral-800/50 border-neutral-700' : 'bg-trakt-500/10 border-trakt-500/30'}
-                                                ${insertBefore ? 'border-t-2 border-t-trakt-400' : ''}
-                                                ${insertAfter  ? 'border-b-2 border-b-trakt-400' : ''}`}
+                                                ${isOver ? 'ring-2 ring-trakt-400' : ''}`}
                                         >
                                             <span className="cursor-grab active:cursor-grabbing text-neutral-600 hover:text-neutral-400 flex-shrink-0">
                                                 <Icon name="GripVertical" size={16} />
