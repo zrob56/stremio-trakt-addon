@@ -89,8 +89,10 @@ const AI_CATALOG_DEFS = [
     type: 'series', id: `ai-show-${g}`, extra: [],
     name: g === 'overall' ? 'AI Show Picks' : `AI ${GENRE_LABELS[g]} Shows`,
   })),
-  { type: 'movie',  id: 'ai-movie-gems', extra: [], name: 'Hidden Gem Movies' },
-  { type: 'series', id: 'ai-show-gems',  extra: [], name: 'Hidden Gem Shows'  },
+  { type: 'movie',  id: 'ai-movie-gems',    extra: [],                                        name: 'Hidden Gem Movies' },
+  { type: 'series', id: 'ai-show-gems',     extra: [],                                        name: 'Hidden Gem Shows'  },
+  { type: 'movie',  id: 'ai-search-movie',  extra: [{ name: 'search', isRequired: false }],   name: 'AI Movie Search'   },
+  { type: 'series', id: 'ai-search-series', extra: [{ name: 'search', isRequired: false }],   name: 'AI Show Search'    },
 ];
 
 const ALL_CATALOG_DEFS = [
@@ -255,6 +257,64 @@ async function handleAICatalog(config, mediaType, genreKey, res) {
   return res.json({ metas });
 }
 
+// ── AI Search ─────────────────────────────────────────────────
+
+async function handleAISearch(config, mediaType, query, res) {
+  if (!query?.trim()) return res.json({ metas: [] });
+
+  const isShow = mediaType === 'series';
+  const mediaLabel = isShow ? 'TV shows' : 'movies';
+  const searchType = isShow ? 'show' : 'movie';
+  const headers = traktHeaders(config.clientId, config.accessToken);
+
+  const prompt = `You are a ${mediaLabel} search engine that understands natural language queries.\n\nThe user searched for: "${query.trim()}"\n\nReturn exactly 20 ${mediaLabel} that best match this search. Interpret the query broadly — include titles, themes, time periods, styles, and subgenres that fit.\n\nReturn ONLY a valid JSON array, no other text:\n[{"title": "Title Here", "year": 2020}, ...]`;
+
+  const geminiRes = await fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7 } }),
+  });
+  if (!geminiRes.ok) return res.json({ metas: [] });
+
+  const geminiData = await geminiRes.json();
+  const rawText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+  let suggestions;
+  try {
+    const jsonMatch = rawText.match(/\[[\s\S]*\]/);
+    suggestions = JSON.parse(jsonMatch ? jsonMatch[0] : rawText);
+  } catch {
+    return res.json({ metas: [] });
+  }
+
+  const lookups = await Promise.allSettled(
+    suggestions.slice(0, 20).map(async ({ title, year }) => {
+      const q = encodeURIComponent(title);
+      const url = `${TRAKT_BASE}/search/${searchType}?query=${q}&years=${year}&limit=1&extended=full`;
+      const r = await fetch(url, { headers });
+      if (!r.ok) return null;
+      const results = await r.json();
+      if (!results?.length) return null;
+      const item = results[0][searchType];
+      if (!item?.ids?.imdb) return null;
+      return {
+        id: item.ids.imdb,
+        type: mediaType,
+        name: item.title,
+        poster: rpdbPoster(item.ids.imdb),
+        releaseInfo: item.year ? String(item.year) : undefined,
+        description: item.overview || undefined,
+        imdbRating: item.rating ? item.rating.toFixed(1) : undefined,
+        genres: item.genres || undefined,
+      };
+    })
+  );
+
+  const metas = lookups.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
+  res.setHeader('Cache-Control', 's-maxage=86400, stale-while-revalidate=604800');
+  return res.json({ metas });
+}
+
 // ── Catalog ───────────────────────────────────────────────────
 
 async function handleCatalog(config, type, id, extra, res) {
@@ -346,6 +406,8 @@ async function handleCatalog(config, type, id, extra, res) {
     }
     default: {
       if (id.startsWith('ai-') && config.geminiKey) {
+        if (id === 'ai-search-movie')  return handleAISearch(config, 'movie',  params.search, res);
+        if (id === 'ai-search-series') return handleAISearch(config, 'series', params.search, res);
         const parts = id.split('-');
         const aiMediaType = parts[1] === 'show' ? 'series' : parts[1];
         const genreKey = parts[2] || 'overall';
