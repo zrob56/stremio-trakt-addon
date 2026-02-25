@@ -139,6 +139,10 @@ async function handleAICatalog(config, mediaType, genreKey, res) {
   const headers = traktHeaders(config.clientId, config.accessToken);
   const isShow = mediaType === 'show';
 
+  // Temperature cycles weekly: 0.7 → 0.8 → 0.9 → 1.0 → repeat
+  const weekNum = Math.floor(Date.now() / (7 * 24 * 60 * 60 * 1000));
+  const temperature = [0.7, 0.8, 0.9, 1.0][weekNum % 4];
+
   // Fetch top-rated items (≥7/10) from Trakt
   const ratingsUrl = isShow
     ? `${TRAKT_BASE}/users/me/ratings/shows?limit=50&extended=full`
@@ -172,7 +176,7 @@ async function handleAICatalog(config, mediaType, genreKey, res) {
   const geminiRes = await fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature } }),
   });
   if (!geminiRes.ok) return res.json({ metas: [] });
 
@@ -285,6 +289,7 @@ async function handleCatalog(config, type, id, extra, res) {
       genres: item.genres || undefined,
     }));
 
+  res.setHeader('Cache-Control', 's-maxage=86400, stale-while-revalidate=604800');
   return res.json({ metas });
 }
 
