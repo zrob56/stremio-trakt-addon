@@ -173,8 +173,13 @@ async function handleAICatalog(config, mediaType, genreKey, res) {
   const ratedTitleSet = new Set([...topRated.map(t => t.title), ...disliked.map(d => d.title)]);
   const watchedNotRated = watchedTitles.filter(t => !ratedTitleSet.has(t)).slice(0, 40);
 
-  const ratedList    = topRated.map(m => `- ${m.title} (${m.year})`).join('\n') || 'None';
-  const watchedList  = watchedNotRated.map(t => `- ${t}`).join('\n') || 'None';
+  // Filter user-excluded titles from positive signal (still kept in allSeenList so they won't be recommended)
+  const excluded = new Set(config.excludedFromFeed || []);
+  const topRatedActive     = topRated.filter(t => !excluded.has(t.title));
+  const watchedNotRatedActive = watchedNotRated.filter(t => !excluded.has(t));
+
+  const ratedList    = topRatedActive.map(m => `- ${m.title} (${m.year})`).join('\n') || 'None';
+  const watchedList  = watchedNotRatedActive.map(t => `- ${t}`).join('\n') || 'None';
   const allSeenList  = [...topRated.map(t => t.title), ...watchedTitles].slice(0, 60).map(t => `- ${t}`).join('\n') || 'None';
   const dislikedList = disliked.map(m => `- ${m.title} (${m.year})`).join('\n') || 'None';
   const mediaLabel   = isShow ? 'TV shows' : 'movies';
