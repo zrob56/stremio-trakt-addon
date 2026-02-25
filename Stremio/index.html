@@ -703,25 +703,40 @@
 
         // ─── Catalog Toggle List ────────────────────────────────────
         function CatalogToggleList({ enabledCatalogs, onChange, geminiKey }) {
-            const dragItem     = useRef(null);
-            const dragOverItem = useRef(null);
-            const [dragging, setDragging] = useState(false);
+            const dragFrom = useRef(null);
+            const [draggingIdx, setDraggingIdx] = useState(null);
+            const [overIdx, setOverIdx] = useState(null);
 
-            const activeCatalogs   = enabledCatalogs.map(id => CATALOG_DEFS.find(c => c.id === id)).filter(Boolean);
+            const activeCatalogs    = enabledCatalogs.map(id => CATALOG_DEFS.find(c => c.id === id)).filter(Boolean);
             const availableCatalogs = CATALOG_DEFS.filter(c => !enabledCatalogs.includes(c.id));
 
-            const onDragStart = (i) => { dragItem.current = i; setDragging(true); };
-            const onDragEnter = (i) => { dragOverItem.current = i; };
-            const onDragEnd   = () => {
-                if (dragItem.current !== null && dragOverItem.current !== null && dragItem.current !== dragOverItem.current) {
+            const handleDragStart = (e, i) => {
+                dragFrom.current = i;
+                setDraggingIdx(i);
+                e.dataTransfer.effectAllowed = 'move';
+            };
+            const handleDragOver = (e, i) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                if (overIdx !== i) setOverIdx(i);
+            };
+            const handleDrop = (e, i) => {
+                e.preventDefault();
+                const from = dragFrom.current;
+                if (from !== null && from !== i) {
                     const list = [...enabledCatalogs];
-                    const dragged = list.splice(dragItem.current, 1)[0];
-                    list.splice(dragOverItem.current, 0, dragged);
+                    const [dragged] = list.splice(from, 1);
+                    list.splice(i, 0, dragged);
                     onChange(list);
                 }
-                dragItem.current = null;
-                dragOverItem.current = null;
-                setDragging(false);
+                dragFrom.current = null;
+                setDraggingIdx(null);
+                setOverIdx(null);
+            };
+            const handleDragEnd = () => {
+                dragFrom.current = null;
+                setDraggingIdx(null);
+                setOverIdx(null);
             };
 
             const disable = (id) => onChange(prev => prev.filter(x => x !== id));
@@ -738,35 +753,44 @@
                             <p className="text-xs text-neutral-600 py-3 text-center border border-dashed border-neutral-800 rounded-lg">No catalogs selected</p>
                         ) : (
                             <div className="space-y-1.5">
-                                {activeCatalogs.map((cat, i) => (
-                                    <div
-                                        key={cat.id}
-                                        draggable
-                                        onDragStart={() => onDragStart(i)}
-                                        onDragEnter={() => onDragEnter(i)}
-                                        onDragEnd={onDragEnd}
-                                        onDragOver={e => e.preventDefault()}
-                                        className={`flex items-center gap-3 p-3 rounded-lg border bg-trakt-500/10 border-trakt-500/30 transition select-none ${dragging && dragItem.current === i ? 'opacity-40' : ''}`}
-                                    >
-                                        <span className="cursor-grab text-neutral-600 hover:text-neutral-400 flex-shrink-0 touch-none">
-                                            <Icon name="GripVertical" size={16} />
-                                        </span>
-                                        <div className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 bg-trakt-500/20`}>
-                                            <Icon name={cat.icon} size={13} className="text-trakt-400" />
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                            <p className="text-sm font-medium text-neutral-200">{cat.name}</p>
-                                            <p className="text-xs text-neutral-500">{cat.desc}</p>
-                                        </div>
-                                        <button
-                                            onClick={() => disable(cat.id)}
-                                            className="p-1 text-neutral-600 hover:text-red-400 transition flex-shrink-0"
-                                            title="Remove"
+                                {activeCatalogs.map((cat, i) => {
+                                    const isDragging = draggingIdx === i;
+                                    const isOver = overIdx === i && draggingIdx !== null && draggingIdx !== i;
+                                    const insertBefore = isOver && draggingIdx > i;
+                                    const insertAfter  = isOver && draggingIdx < i;
+                                    return (
+                                        <div
+                                            key={cat.id}
+                                            draggable
+                                            onDragStart={e => handleDragStart(e, i)}
+                                            onDragOver={e => handleDragOver(e, i)}
+                                            onDrop={e => handleDrop(e, i)}
+                                            onDragEnd={handleDragEnd}
+                                            className={`flex items-center gap-3 p-3 rounded-lg border transition select-none
+                                                ${isDragging ? 'opacity-40 bg-neutral-800/50 border-neutral-700' : 'bg-trakt-500/10 border-trakt-500/30'}
+                                                ${insertBefore ? 'border-t-2 border-t-trakt-400' : ''}
+                                                ${insertAfter  ? 'border-b-2 border-b-trakt-400' : ''}`}
                                         >
-                                            <Icon name="X" size={14} />
-                                        </button>
-                                    </div>
-                                ))}
+                                            <span className="cursor-grab active:cursor-grabbing text-neutral-600 hover:text-neutral-400 flex-shrink-0">
+                                                <Icon name="GripVertical" size={16} />
+                                            </span>
+                                            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 bg-trakt-500/20">
+                                                <Icon name={cat.icon} size={13} className="text-trakt-400" />
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-sm font-medium text-neutral-200">{cat.name}</p>
+                                                <p className="text-xs text-neutral-500">{cat.desc}</p>
+                                            </div>
+                                            <button
+                                                onClick={() => disable(cat.id)}
+                                                className="p-1 text-neutral-600 hover:text-red-400 transition flex-shrink-0"
+                                                title="Remove"
+                                            >
+                                                <Icon name="X" size={14} />
+                                            </button>
+                                        </div>
+                                    );
+                                })}
                             </div>
                         )}
                     </div>
