@@ -704,37 +704,38 @@
         // ─── Catalog Toggle List ────────────────────────────────────
         function CatalogToggleList({ enabledCatalogs, onChange, geminiKey }) {
             const dragFrom = useRef(null);
+            const dragTo   = useRef(null);
             const [draggingIdx, setDraggingIdx] = useState(null);
-            const [overIdx, setOverIdx] = useState(null);
+            const [overIdx, setOverIdx]         = useState(null);
+            const enabledRef = useRef(enabledCatalogs);
+            useEffect(() => { enabledRef.current = enabledCatalogs; }, [enabledCatalogs]);
 
             const activeCatalogs    = enabledCatalogs.map(id => CATALOG_DEFS.find(c => c.id === id)).filter(Boolean);
             const availableCatalogs = CATALOG_DEFS.filter(c => !enabledCatalogs.includes(c.id));
 
             const handleDragStart = (e, i) => {
                 dragFrom.current = i;
-                setDraggingIdx(i);
+                dragTo.current   = i;
                 e.dataTransfer.effectAllowed = 'move';
+                setDraggingIdx(i);
             };
             const handleDragOver = (e, i) => {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = 'move';
-                if (overIdx !== i) setOverIdx(i);
+                dragTo.current = i;
+                setOverIdx(i);
             };
-            const handleDrop = (e, i) => {
-                e.preventDefault();
+            const handleDragEnd = () => {
                 const from = dragFrom.current;
-                if (from !== null && from !== i) {
-                    const list = [...enabledCatalogs];
+                const to   = dragTo.current;
+                if (from !== null && to !== null && from !== to) {
+                    const list = [...enabledRef.current];
                     const [dragged] = list.splice(from, 1);
-                    list.splice(i, 0, dragged);
+                    list.splice(to, 0, dragged);
                     onChange(list);
                 }
                 dragFrom.current = null;
-                setDraggingIdx(null);
-                setOverIdx(null);
-            };
-            const handleDragEnd = () => {
-                dragFrom.current = null;
+                dragTo.current   = null;
                 setDraggingIdx(null);
                 setOverIdx(null);
             };
@@ -764,7 +765,6 @@
                                             draggable
                                             onDragStart={e => handleDragStart(e, i)}
                                             onDragOver={e => handleDragOver(e, i)}
-                                            onDrop={e => handleDrop(e, i)}
                                             onDragEnd={handleDragEnd}
                                             className={`flex items-center gap-3 p-3 rounded-lg border transition select-none
                                                 ${isDragging ? 'opacity-40 bg-neutral-800/50 border-neutral-700' : 'bg-trakt-500/10 border-trakt-500/30'}
