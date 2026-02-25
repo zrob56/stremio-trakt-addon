@@ -118,7 +118,7 @@ function handleManifest(config, res) {
     version: '2.0.0',
     name: 'Trakt Recommendations',
     description: 'AI-powered movie & show recommendations by genre, powered by your Trakt history.',
-    logo: 'https://walter.trakt.tv/hotlink-ok/public/favicon.svg',
+    logo: 'https://www.cnet.com/a/img/resize/0e9874cc9d6b18489f832793796d285141496106/hub/2021/10/16/11804578-0dbc-42af-bcd1-3bc7b1394962/the-batman-2022-teaser-poster-batman-01-promo.jpg?auto=webp&fit=bounds&height=900&precrop=1881,1411,x423,y0&width=1200',
     resources: ['catalog'],
     types: ['movie', 'series'],
     catalogs,
