@@ -86,16 +86,25 @@
         const SHOW_GENRE_KEYS  = ['overall','action','adventure','animation','comedy','crime','drama','fantasy','horror','mystery','romance','scifi','thriller'];
 
         const UTILITY_CATALOG_DEFS = [
-          { id: 'trakt-watchlist',       type: 'movie', name: 'Your Watchlist',          desc: 'Movies you saved',                icon: 'Bookmark' },
-          { id: 'trakt-trending',        type: 'movie', name: 'Trending on Trakt',       desc: 'What everyone is watching',       icon: 'TrendingUp' },
-          { id: 'trakt-watchlist-shows', type: 'series', name: 'Your Show Watchlist',     desc: 'Shows you saved',                 icon: 'Bookmark' },
-          { id: 'trakt-trending-shows',  type: 'series', name: 'Trending Shows on Trakt', desc: 'What everyone is watching',       icon: 'TrendingUp' },
+          { id: 'trakt-watchlist',           type: 'movie',  name: 'Your Watchlist',            desc: 'Movies you saved',                       icon: 'Bookmark'   },
+          { id: 'trakt-trending',            type: 'movie',  name: 'Trending on Trakt',         desc: 'What everyone is watching',              icon: 'TrendingUp' },
+          { id: 'trakt-popular',             type: 'movie',  name: 'Popular Movies',            desc: 'Most popular right now',                 icon: 'Star'       },
+          { id: 'trakt-anticipated',         type: 'movie',  name: 'Most Anticipated',          desc: 'Most hyped upcoming movies',             icon: 'Calendar'   },
+          { id: 'trakt-boxoffice',           type: 'movie',  name: 'Box Office',                desc: 'Top earners this week',                  icon: 'DollarSign' },
+          { id: 'trakt-recommended',         type: 'movie',  name: 'Trakt Picks For You',       desc: 'Personalized Trakt recommendations',     icon: 'ThumbsUp'   },
+          { id: 'trakt-watchlist-shows',     type: 'series', name: 'Your Show Watchlist',       desc: 'Shows you saved',                        icon: 'Bookmark'   },
+          { id: 'trakt-trending-shows',      type: 'series', name: 'Trending Shows on Trakt',   desc: 'What everyone is watching',              icon: 'TrendingUp' },
+          { id: 'trakt-popular-shows',       type: 'series', name: 'Popular Shows',             desc: 'Most popular right now',                 icon: 'Star'       },
+          { id: 'trakt-anticipated-shows',   type: 'series', name: 'Most Anticipated Shows',    desc: 'Most hyped upcoming shows',              icon: 'Calendar'   },
+          { id: 'trakt-recommended-shows',   type: 'series', name: 'Trakt Show Picks',          desc: 'Personalized Trakt recommendations',     icon: 'ThumbsUp'   },
         ];
 
         // All catalog defs (for CatalogToggleList reorder)
         const ALL_AI_CATALOG_DEFS = [
-          ...MOVIE_GENRE_KEYS.map(k => ({ id: `ai-movie-${k}`, type: 'movie', name: k === 'overall' ? 'AI Movie Picks' : `AI ${GENRE_DEFS.find(g=>g.key===k)?.label} Movies`, icon: GENRE_DEFS.find(g=>g.key===k)?.icon || 'Sparkles', requiresGemini: true })),
+          ...MOVIE_GENRE_KEYS.map(k => ({ id: `ai-movie-${k}`, type: 'movie',  name: k === 'overall' ? 'AI Movie Picks' : `AI ${GENRE_DEFS.find(g=>g.key===k)?.label} Movies`, icon: GENRE_DEFS.find(g=>g.key===k)?.icon || 'Sparkles', requiresGemini: true })),
           ...SHOW_GENRE_KEYS.map(k  => ({ id: `ai-show-${k}`,  type: 'series', name: k === 'overall' ? 'AI Show Picks'  : `AI ${GENRE_DEFS.find(g=>g.key===k)?.label} Shows`,  icon: GENRE_DEFS.find(g=>g.key===k)?.icon || 'Sparkles', requiresGemini: true })),
+          { id: 'ai-movie-gems', type: 'movie',  name: 'Hidden Gem Movies', desc: 'Underrated picks matching your taste', icon: 'Gem', requiresGemini: true },
+          { id: 'ai-show-gems',  type: 'series', name: 'Hidden Gem Shows',  desc: 'Underrated shows matching your taste', icon: 'Gem', requiresGemini: true },
         ];
         const CATALOG_DEFS = [...UTILITY_CATALOG_DEFS, ...ALL_AI_CATALOG_DEFS];
         const DEFAULT_CATALOGS = ['ai-movie-overall', 'ai-show-overall', 'trakt-watchlist', 'trakt-watchlist-shows', 'trakt-trending', 'trakt-trending-shows'];
@@ -658,7 +667,7 @@
             };
 
             const movieUtility = UTILITY_CATALOG_DEFS.filter(c => c.type === 'movie');
-            const showUtility  = UTILITY_CATALOG_DEFS.filter(c => c.type === 'show');
+            const showUtility  = UTILITY_CATALOG_DEFS.filter(c => c.type === 'series');
 
             return (
                 <div className="space-y-4">

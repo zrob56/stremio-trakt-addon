@@ -89,13 +89,22 @@ const AI_CATALOG_DEFS = [
     type: 'series', id: `ai-show-${g}`, extra: [],
     name: g === 'overall' ? 'AI Show Picks' : `AI ${GENRE_LABELS[g]} Shows`,
   })),
+  { type: 'movie',  id: 'ai-movie-gems', extra: [], name: 'Hidden Gem Movies' },
+  { type: 'series', id: 'ai-show-gems',  extra: [], name: 'Hidden Gem Shows'  },
 ];
 
 const ALL_CATALOG_DEFS = [
-  { type: 'movie', id: 'trakt-watchlist',       name: 'Your Watchlist',          extra: [{ name: 'skip', isRequired: false }] },
-  { type: 'movie', id: 'trakt-trending',         name: 'Trending on Trakt',       extra: [{ name: 'skip', isRequired: false }] },
-  { type: 'series', id: 'trakt-watchlist-shows',  name: 'Your Show Watchlist',     extra: [{ name: 'skip', isRequired: false }] },
-  { type: 'series', id: 'trakt-trending-shows',   name: 'Trending Shows on Trakt', extra: [{ name: 'skip', isRequired: false }] },
+  { type: 'movie',  id: 'trakt-watchlist',          name: 'Your Watchlist',            extra: [{ name: 'skip', isRequired: false }] },
+  { type: 'movie',  id: 'trakt-trending',            name: 'Trending on Trakt',         extra: [{ name: 'skip', isRequired: false }] },
+  { type: 'movie',  id: 'trakt-popular',             name: 'Popular Movies',            extra: [{ name: 'skip', isRequired: false }] },
+  { type: 'movie',  id: 'trakt-anticipated',         name: 'Most Anticipated Movies',   extra: [{ name: 'skip', isRequired: false }] },
+  { type: 'movie',  id: 'trakt-boxoffice',           name: 'Box Office',                extra: [] },
+  { type: 'movie',  id: 'trakt-recommended',         name: 'Trakt Picks For You',       extra: [{ name: 'skip', isRequired: false }] },
+  { type: 'series', id: 'trakt-watchlist-shows',     name: 'Your Show Watchlist',       extra: [{ name: 'skip', isRequired: false }] },
+  { type: 'series', id: 'trakt-trending-shows',      name: 'Trending Shows on Trakt',   extra: [{ name: 'skip', isRequired: false }] },
+  { type: 'series', id: 'trakt-popular-shows',       name: 'Popular Shows',             extra: [{ name: 'skip', isRequired: false }] },
+  { type: 'series', id: 'trakt-anticipated-shows',   name: 'Most Anticipated Shows',    extra: [{ name: 'skip', isRequired: false }] },
+  { type: 'series', id: 'trakt-recommended-shows',   name: 'Trakt Show Picks',          extra: [{ name: 'skip', isRequired: false }] },
   ...AI_CATALOG_DEFS,
 ];
 
@@ -183,13 +192,16 @@ async function handleAICatalog(config, mediaType, genreKey, res) {
   const allSeenList  = [...topRated.map(t => t.title), ...watchedTitles].slice(0, 60).map(t => `- ${t}`).join('\n') || 'None';
   const dislikedList = disliked.map(m => `- ${m.title} (${m.year})`).join('\n') || 'None';
   const mediaLabel   = isShow ? 'TV shows' : 'movies';
-  const genreLabel   = GENRE_LABELS[genreKey] || null;
+  const isGems       = genreKey === 'gems';
+  const genreLabel   = (!isGems && GENRE_LABELS[genreKey]) || null;
   const genreClause  = genreLabel ? ` that are specifically in the ${genreLabel} genre` : '';
   const customClause = config.customInstructions?.trim()
     ? `\n\nAdditional instructions from the user: ${config.customInstructions.trim()}`
     : '';
 
-  const prompt = `You are a ${mediaLabel} recommendation engine.\n\nThe user has rated these ${mediaLabel} highly (7-10/10):\n${ratedList}\n\nThey have also watched these (treat as enjoyed — use as positive signal):\n${watchedList}\n\nDo NOT recommend anything from either list above (already seen):\n${allSeenList}\n\nThe user disliked these (rated 1-6/10) — avoid anything similar in tone, genre, or style:\n${dislikedList}\n\nRecommend exactly 20 ${mediaLabel}${genreClause} they would likely enjoy that are NOT in the already-seen list. Focus on similar themes, tone, directors, or genres.${customClause}\nReturn ONLY a valid JSON array, no other text:\n[{"title": "Title Here", "year": 2020}, ...]`;
+  const prompt = isGems
+    ? `You are a hidden gems ${mediaLabel} recommendation engine.\n\nThe user has rated these ${mediaLabel} highly (7-10/10):\n${ratedList}\n\nThey have also watched these (treat as enjoyed):\n${watchedList}\n\nDo NOT recommend anything already seen:\n${allSeenList}\n\nAvoid anything similar to these disliked titles:\n${dislikedList}\n\nRecommend exactly 20 ${mediaLabel} that are underrated, obscure, or cult classics — NOT mainstream blockbusters, popular franchises, or well-known Oscar winners. They should genuinely match the user's taste in themes and style, but be titles most casual viewers haven't heard of.${customClause}\nReturn ONLY a valid JSON array, no other text:\n[{"title": "Title Here", "year": 2020}, ...]`
+    : `You are a ${mediaLabel} recommendation engine.\n\nThe user has rated these ${mediaLabel} highly (7-10/10):\n${ratedList}\n\nThey have also watched these (treat as enjoyed — use as positive signal):\n${watchedList}\n\nDo NOT recommend anything from either list above (already seen):\n${allSeenList}\n\nThe user disliked these (rated 1-6/10) — avoid anything similar in tone, genre, or style:\n${dislikedList}\n\nRecommend exactly 20 ${mediaLabel}${genreClause} they would likely enjoy that are NOT in the already-seen list. Focus on similar themes, tone, directors, or genres.${customClause}\nReturn ONLY a valid JSON array, no other text:\n[{"title": "Title Here", "year": 2020}, ...]`;
 
   // Call Gemini
   const geminiRes = await fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
@@ -268,6 +280,32 @@ async function handleCatalog(config, type, id, extra, res) {
       traktData = raw.map(item => item.movie);
       break;
     }
+    case 'trakt-popular': {
+      traktData = await traktFetch(
+        `${TRAKT_BASE}/movies/popular?limit=20&page=${page}&extended=full`, headers
+      );
+      break;
+    }
+    case 'trakt-anticipated': {
+      const raw = await traktFetch(
+        `${TRAKT_BASE}/movies/anticipated?limit=20&page=${page}&extended=full`, headers
+      );
+      traktData = raw.map(item => item.movie);
+      break;
+    }
+    case 'trakt-boxoffice': {
+      const raw = await traktFetch(
+        `${TRAKT_BASE}/movies/boxoffice?extended=full`, headers
+      );
+      traktData = raw.map(item => item.movie);
+      break;
+    }
+    case 'trakt-recommended': {
+      traktData = await traktFetch(
+        `${TRAKT_BASE}/recommendations/movies?limit=20&extended=full`, headers
+      );
+      break;
+    }
     case 'trakt-watchlist-shows': {
       const raw = await traktFetch(
         `${TRAKT_BASE}/sync/watchlist/shows?sort=added&limit=20&page=${page}&extended=full`, headers
@@ -281,6 +319,28 @@ async function handleCatalog(config, type, id, extra, res) {
         `${TRAKT_BASE}/shows/trending?limit=20&page=${page}&extended=full`, headers
       );
       traktData = raw.map(item => item.show);
+      itemType = 'series';
+      break;
+    }
+    case 'trakt-popular-shows': {
+      traktData = await traktFetch(
+        `${TRAKT_BASE}/shows/popular?limit=20&page=${page}&extended=full`, headers
+      );
+      itemType = 'series';
+      break;
+    }
+    case 'trakt-anticipated-shows': {
+      const raw = await traktFetch(
+        `${TRAKT_BASE}/shows/anticipated?limit=20&page=${page}&extended=full`, headers
+      );
+      traktData = raw.map(item => item.show);
+      itemType = 'series';
+      break;
+    }
+    case 'trakt-recommended-shows': {
+      traktData = await traktFetch(
+        `${TRAKT_BASE}/recommendations/shows?limit=20&extended=full`, headers
+      );
       itemType = 'series';
       break;
     }
