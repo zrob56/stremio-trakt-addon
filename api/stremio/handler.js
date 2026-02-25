@@ -82,7 +82,9 @@ const AI_CATALOG_IDS = ['trakt-ai-picks', 'trakt-ai-picks-shows'];
 function handleManifest(config, res) {
   let catalogs;
   if (config?.enabledCatalogs?.length) {
-    catalogs = ALL_CATALOG_DEFS.filter(c => config.enabledCatalogs.includes(c.id));
+    catalogs = config.enabledCatalogs
+      .map(id => ALL_CATALOG_DEFS.find(c => c.id === id))
+      .filter(Boolean);
   } else {
     // Backward compat: all non-AI catalogs, plus AI if geminiKey present
     catalogs = ALL_CATALOG_DEFS.filter(c => !AI_CATALOG_IDS.includes(c.id) || config?.geminiKey);

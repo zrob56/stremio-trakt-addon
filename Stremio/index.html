@@ -580,55 +580,109 @@
 
         // ─── Catalog Toggle List ────────────────────────────────────
         function CatalogToggleList({ enabledCatalogs, onChange, geminiKey }) {
-            const toggle = useCallback((id) => {
-                onChange(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
-            }, [onChange]);
+            const dragItem     = useRef(null);
+            const dragOverItem = useRef(null);
+            const [dragging, setDragging] = useState(false);
 
-            const movies = CATALOG_DEFS.filter(c => c.type === 'movie');
-            const shows  = CATALOG_DEFS.filter(c => c.type === 'show');
+            const activeCatalogs   = enabledCatalogs.map(id => CATALOG_DEFS.find(c => c.id === id)).filter(Boolean);
+            const availableCatalogs = CATALOG_DEFS.filter(c => !enabledCatalogs.includes(c.id));
 
-            const renderRow = (cat) => {
-                const enabled = enabledCatalogs.includes(cat.id);
-                const locked  = cat.requiresGemini && !geminiKey;
-                return (
-                    <button
-                        key={cat.id}
-                        onClick={() => !locked && toggle(cat.id)}
-                        disabled={locked}
-                        className={`w-full flex items-center gap-3 p-3 rounded-lg border transition text-left ${
-                            locked
-                                ? 'border-neutral-800 opacity-40 cursor-not-allowed'
-                                : enabled
-                                    ? 'bg-trakt-500/10 border-trakt-500/30 hover:bg-trakt-500/15'
-                                    : 'bg-neutral-800/40 border-neutral-700/50 hover:bg-neutral-800'
-                        }`}
-                    >
-                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${enabled && !locked ? 'bg-trakt-500/20' : 'bg-neutral-700/50'}`}>
-                            <Icon name={cat.icon} size={14} className={enabled && !locked ? 'text-trakt-400' : 'text-neutral-500'} />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                            <p className={`text-sm font-medium ${enabled && !locked ? 'text-neutral-200' : 'text-neutral-400'}`}>{cat.name}</p>
-                            <p className="text-xs text-neutral-500">{cat.requiresGemini ? 'Requires Gemini API key' : cat.desc}</p>
-                        </div>
-                        <div className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 border transition ${
-                            enabled && !locked ? 'bg-trakt-600 border-trakt-600' : 'border-neutral-600 bg-transparent'
-                        }`}>
-                            {enabled && !locked && <Icon name="Check" size={12} className="text-white" />}
-                        </div>
-                    </button>
-                );
+            const onDragStart = (i) => { dragItem.current = i; setDragging(true); };
+            const onDragEnter = (i) => { dragOverItem.current = i; };
+            const onDragEnd   = () => {
+                if (dragItem.current !== null && dragOverItem.current !== null && dragItem.current !== dragOverItem.current) {
+                    const list = [...enabledCatalogs];
+                    const dragged = list.splice(dragItem.current, 1)[0];
+                    list.splice(dragOverItem.current, 0, dragged);
+                    onChange(list);
+                }
+                dragItem.current = null;
+                dragOverItem.current = null;
+                setDragging(false);
             };
+
+            const disable = (id) => onChange(prev => prev.filter(x => x !== id));
+            const enable  = (id) => onChange(prev => [...prev, id]);
 
             return (
                 <div className="space-y-4">
+                    {/* Active catalogs — draggable */}
                     <div>
-                        <p className="text-xs font-medium text-neutral-400 uppercase tracking-wide mb-2">Movies</p>
-                        <div className="space-y-1.5">{movies.map(renderRow)}</div>
+                        <p className="text-xs font-medium text-neutral-400 uppercase tracking-wide mb-2">
+                            Active <span className="text-neutral-600 normal-case font-normal">— drag to reorder</span>
+                        </p>
+                        {activeCatalogs.length === 0 ? (
+                            <p className="text-xs text-neutral-600 py-3 text-center border border-dashed border-neutral-800 rounded-lg">No catalogs selected</p>
+                        ) : (
+                            <div className="space-y-1.5">
+                                {activeCatalogs.map((cat, i) => (
+                                    <div
+                                        key={cat.id}
+                                        draggable
+                                        onDragStart={() => onDragStart(i)}
+                                        onDragEnter={() => onDragEnter(i)}
+                                        onDragEnd={onDragEnd}
+                                        onDragOver={e => e.preventDefault()}
+                                        className={`flex items-center gap-3 p-3 rounded-lg border bg-trakt-500/10 border-trakt-500/30 transition select-none ${dragging && dragItem.current === i ? 'opacity-40' : ''}`}
+                                    >
+                                        <span className="cursor-grab text-neutral-600 hover:text-neutral-400 flex-shrink-0 touch-none">
+                                            <Icon name="GripVertical" size={16} />
+                                        </span>
+                                        <div className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 bg-trakt-500/20`}>
+                                            <Icon name={cat.icon} size={13} className="text-trakt-400" />
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-sm font-medium text-neutral-200">{cat.name}</p>
+                                            <p className="text-xs text-neutral-500">{cat.desc}</p>
+                                        </div>
+                                        <button
+                                            onClick={() => disable(cat.id)}
+                                            className="p-1 text-neutral-600 hover:text-red-400 transition flex-shrink-0"
+                                            title="Remove"
+                                        >
+                                            <Icon name="X" size={14} />
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
                     </div>
-                    <div>
-                        <p className="text-xs font-medium text-neutral-400 uppercase tracking-wide mb-2">TV Shows</p>
-                        <div className="space-y-1.5">{shows.map(renderRow)}</div>
-                    </div>
+
+                    {/* Available catalogs — not draggable, click to add */}
+                    {availableCatalogs.length > 0 && (
+                        <div>
+                            <p className="text-xs font-medium text-neutral-400 uppercase tracking-wide mb-2">Available to add</p>
+                            <div className="space-y-1.5">
+                                {availableCatalogs.map(cat => {
+                                    const locked = cat.requiresGemini && !geminiKey;
+                                    return (
+                                        <div
+                                            key={cat.id}
+                                            className={`flex items-center gap-3 p-3 rounded-lg border transition ${locked ? 'border-neutral-800 opacity-40' : 'bg-neutral-800/40 border-neutral-700/50'}`}
+                                        >
+                                            <span className="w-4 flex-shrink-0" />
+                                            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 bg-neutral-700/50">
+                                                <Icon name={cat.icon} size={13} className="text-neutral-500" />
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-sm font-medium text-neutral-400">{cat.name}</p>
+                                                <p className="text-xs text-neutral-600">{locked ? 'Requires Gemini API key' : cat.desc}</p>
+                                            </div>
+                                            {!locked && (
+                                                <button
+                                                    onClick={() => enable(cat.id)}
+                                                    className="p-1 text-neutral-600 hover:text-emerald-400 transition flex-shrink-0"
+                                                    title="Add"
+                                                >
+                                                    <Icon name="Plus" size={14} />
+                                                </button>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
                 </div>
             );
         }
