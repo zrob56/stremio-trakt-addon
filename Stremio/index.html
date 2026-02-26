@@ -1680,7 +1680,7 @@
             useEffect(() => {
                 fetch('/api/stremio/config')
                     .then(r => r.json())
-                    .then(d => { if (d.sharedApp) setSharedApp(true); })
+                    .then(d => { if (d.sharedApp) { setSharedApp(true); if (d.clientId) setClientId(d.clientId); } })
                     .catch(() => {});
             }, []);
 
