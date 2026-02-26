@@ -1330,7 +1330,7 @@
         }
 
         // ─── Step 5: Manage ─────────────────────────────────────────
-        function StepManage({ clientId, clientSecret, geminiKey: initialGeminiKey, initialCustomInstructions, tokens, enabledCatalogs, onCatalogsChange, onReauth, uuid, traktLists = [], traktListsLoading = false }) {
+        function StepManage({ clientId, clientSecret, geminiKey: initialGeminiKey, initialCustomInstructions, tokens, enabledCatalogs, onCatalogsChange, onReauth, onBack, uuid, traktLists = [], traktListsLoading = false }) {
             const [activeTab, setActiveTab] = useState('catalogs');
             const [copied, setCopied] = useState(false);
             const [toast, setToast] = useState(null);
@@ -1465,6 +1465,10 @@
             return (
                 <div className="space-y-6 animate-fade-in">
                     {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+
+                    <button onClick={onBack} className="text-neutral-500 hover:text-neutral-300 text-sm flex items-center gap-1 transition">
+                        <Icon name="ArrowLeft" size={14} /> Back
+                    </button>
 
                     {/* Header */}
                     <div className="flex items-center justify-between">
@@ -1736,6 +1740,7 @@
                                 enabledCatalogs={enabledCatalogs}
                                 onCatalogsChange={handleCatalogsChange}
                                 onReauth={handleReauth}
+                                onBack={() => setStep(4)}
                                 uuid={uuid}
                                 traktLists={traktLists}
                                 traktListsLoading={traktListsLoading}
