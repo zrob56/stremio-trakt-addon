@@ -316,18 +316,25 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
   }
 
   const traktType = isShow ? 'show' : 'movie';
+  const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
   const items = parsed.filter(item => item && typeof item.title === 'string' && item.year);
   const resolved = await Promise.all(items.map(async item => {
     try {
       const r = await fetch(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&limit=5`, { headers });
       if (!r.ok) return null;
       const data = await r.json();
-      const q = item.title.toLowerCase().trim();
-      const match = data?.find(d => {
+      if (!data?.length) return null;
+      const q = norm(item.title);
+      // Tier 1: normalized exact title + year within 1
+      const exact = data.find(d => {
         const t = d[traktType];
-        return t?.ids?.imdb && t.title?.toLowerCase().trim() === q && Math.abs((t.year || 0) - item.year) <= 1;
+        return t?.ids?.imdb && norm(t.title || '') === q && Math.abs((t.year || 0) - item.year) <= 1;
       });
-      return match?.[traktType]?.ids?.imdb || null;
+      if (exact) return exact[traktType].ids.imdb;
+      // Tier 2: top result if year within 1 (handles minor title formatting differences)
+      const top = data[0]?.[traktType];
+      if (top?.ids?.imdb && Math.abs((top.year || 0) - item.year) <= 1) return top.ids.imdb;
+      return null;
     } catch { return null; }
   }));
   const imdbIds = resolved.filter(id => id && /^tt\d+$/.test(id));
@@ -386,18 +393,25 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
     return res.json({ metas: [] });
   }
 
+  const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
   const items = parsed.filter(item => item && typeof item.title === 'string' && item.year);
   const resolved = await Promise.all(items.map(async item => {
     try {
       const r = await fetch(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&limit=5`, { headers });
       if (!r.ok) return null;
       const data = await r.json();
-      const q = item.title.toLowerCase().trim();
-      const match = data?.find(d => {
+      if (!data?.length) return null;
+      const q = norm(item.title);
+      // Tier 1: normalized exact title + year within 1
+      const exact = data.find(d => {
         const t = d[traktType];
-        return t?.ids?.imdb && t.title?.toLowerCase().trim() === q && Math.abs((t.year || 0) - item.year) <= 1;
+        return t?.ids?.imdb && norm(t.title || '') === q && Math.abs((t.year || 0) - item.year) <= 1;
       });
-      return match?.[traktType]?.ids?.imdb || null;
+      if (exact) return exact[traktType].ids.imdb;
+      // Tier 2: top result if year within 1 (handles minor title formatting differences)
+      const top = data[0]?.[traktType];
+      if (top?.ids?.imdb && Math.abs((top.year || 0) - item.year) <= 1) return top.ids.imdb;
+      return null;
     } catch { return null; }
   }));
   const imdbIds = resolved.filter(id => id && /^tt\d+$/.test(id));
