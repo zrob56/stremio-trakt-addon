@@ -129,15 +129,15 @@ const SHOW_GENRE_KEYS  = ['overall','action','adventure','animation','comedy','c
 
 const AI_CATALOG_DEFS = [
   ...MOVIE_GENRE_KEYS.map(g => ({
-    type: 'movie', id: `ai-movie-${g}`, extra: [],
+    type: 'movie', id: `ai-movie-${g}`, extra: [{ name: 'skip', isRequired: false }],
     name: g === 'overall' ? 'AI Movie Picks' : `AI ${GENRE_LABELS[g]} Movies`,
   })),
   ...SHOW_GENRE_KEYS.map(g => ({
-    type: 'series', id: `ai-show-${g}`, extra: [],
+    type: 'series', id: `ai-show-${g}`, extra: [{ name: 'skip', isRequired: false }],
     name: g === 'overall' ? 'AI Show Picks' : `AI ${GENRE_LABELS[g]} Shows`,
   })),
-  { type: 'movie',  id: 'ai-movie-gems',    extra: [],                                        name: 'Hidden Gem Movies' },
-  { type: 'series', id: 'ai-show-gems',     extra: [],                                        name: 'Hidden Gem Shows'  },
+  { type: 'movie',  id: 'ai-movie-gems',    extra: [{ name: 'skip', isRequired: false }],     name: 'Hidden Gem Movies' },
+  { type: 'series', id: 'ai-show-gems',     extra: [{ name: 'skip', isRequired: false }],     name: 'Hidden Gem Shows'  },
   { type: 'movie',  id: 'ai-search-movie',  extra: [{ name: 'search', isRequired: false }],   name: 'AI Movie Search'   },
   { type: 'series', id: 'ai-search-series', extra: [{ name: 'search', isRequired: false }],   name: 'AI Show Search'    },
 ];
@@ -193,15 +193,26 @@ function rpdbPoster(imdbId) {
   return `https://api.ratingposterdb.com/${RPDB_FREE_KEY}/imdb/poster-default/${imdbId}.jpg`;
 }
 
-async function handleAICatalog(config, mediaType, genreKey, res, uuid = null) {
+async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = null) {
   const redis = uuid ? getRedis() : null;
   const cacheKey = uuid ? `ai:${uuid}:ai-${mediaType === 'series' ? 'show' : 'movie'}-${genreKey}` : null;
   if (redis && cacheKey) {
     try {
       const cached = await redis.get(cacheKey);
-      if (cached) return res.json({ metas: typeof cached === 'string' ? JSON.parse(cached) : cached });
+      if (cached) {
+        const data = typeof cached === 'string' ? JSON.parse(cached) : cached;
+        // Normalize: old format is object[], new format is string[]
+        const ids = (data.length > 0 && typeof data[0] !== 'string')
+          ? data.map(m => m.id).filter(Boolean)
+          : data;
+        const page = ids.slice(skip, skip + 20);
+        return res.json({ metas: page.map(id => ({ id, type: mediaType })) });
+      }
     } catch { /* non-fatal */ }
   }
+
+  // Don't call Gemini for non-first pages when cache is cold
+  if (skip > 0) return res.json({ metas: [] });
 
   const headers = traktHeaders(config.clientId, config.accessToken);
   const isShow = mediaType === 'series';
@@ -242,7 +253,7 @@ async function handleAICatalog(config, mediaType, genreKey, res, uuid = null) {
 
   // Filter user-excluded titles from positive signal (still kept in allSeenList so they won't be recommended)
   const excluded = new Set(config.excludedFromFeed || []);
-  const topRatedActive     = topRated.filter(t => !excluded.has(t.title));
+  const topRatedActive        = topRated.filter(t => !excluded.has(t.title));
   const watchedNotRatedActive = watchedNotRated.filter(t => !excluded.has(t));
 
   const ratedList    = topRatedActive.map(m => `- ${m.title} (${m.year})`).join('\n') || 'None';
@@ -258,8 +269,8 @@ async function handleAICatalog(config, mediaType, genreKey, res, uuid = null) {
     : '';
 
   const prompt = isGems
-    ? `You are a hidden gems ${mediaLabel} recommendation engine.\n\nThe user has rated these ${mediaLabel} highly (7-10/10):\n${ratedList}\n\nThey have also watched these (treat as enjoyed):\n${watchedList}\n\nDo NOT recommend anything already seen:\n${allSeenList}\n\nAvoid anything similar to these disliked titles:\n${dislikedList}\n\nRecommend exactly 20 ${mediaLabel} that are underrated, obscure, or cult classics — NOT mainstream blockbusters, popular franchises, or well-known Oscar winners. They should genuinely match the user's taste in themes and style, but be titles most casual viewers haven't heard of.${customClause}\nReturn ONLY a valid JSON array, no other text:\n[{"title": "Title Here", "year": 2020}, ...]`
-    : `You are a ${mediaLabel} recommendation engine.\n\nThe user has rated these ${mediaLabel} highly (7-10/10):\n${ratedList}\n\nThey have also watched these (treat as enjoyed — use as positive signal):\n${watchedList}\n\nDo NOT recommend anything from either list above (already seen):\n${allSeenList}\n\nThe user disliked these (rated 1-6/10) — avoid anything similar in tone, genre, or style:\n${dislikedList}\n\nRecommend exactly 20 ${mediaLabel}${genreClause} they would likely enjoy that are NOT in the already-seen list. Focus on similar themes, tone, directors, or genres.${customClause}\nReturn ONLY a valid JSON array, no other text:\n[{"title": "Title Here", "year": 2020}, ...]`;
+    ? `You are a hidden gems ${mediaLabel} recommendation engine.\n\nThe user has rated these ${mediaLabel} highly (7-10/10):\n${ratedList}\n\nThey have also watched these (treat as enjoyed):\n${watchedList}\n\nDo NOT recommend anything already seen:\n${allSeenList}\n\nAvoid anything similar to these disliked titles:\n${dislikedList}\n\nRecommend exactly 60 ${mediaLabel} that are underrated, obscure, or cult classics — NOT mainstream blockbusters, popular franchises, or well-known Oscar winners. They should genuinely match the user's taste in themes and style, but be titles most casual viewers haven't heard of.${customClause}\nReturn ONLY a valid JSON array of 60 IMDb IDs, no other text:\n["tt1234567", "tt2345678", ...]`
+    : `You are a ${mediaLabel} recommendation engine.\n\nThe user has rated these ${mediaLabel} highly (7-10/10):\n${ratedList}\n\nThey have also watched these (treat as enjoyed — use as positive signal):\n${watchedList}\n\nDo NOT recommend anything from either list above (already seen):\n${allSeenList}\n\nThe user disliked these (rated 1-6/10) — avoid anything similar in tone, genre, or style:\n${dislikedList}\n\nRecommend exactly 60 ${mediaLabel}${genreClause} they would likely enjoy that are NOT in the already-seen list. Focus on similar themes, tone, directors, or genres.${customClause}\nReturn ONLY a valid JSON array of 60 IMDb IDs, no other text:\n["tt1234567", "tt2345678", ...]`;
 
   // Call Gemini
   const geminiRes = await fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
@@ -272,49 +283,22 @@ async function handleAICatalog(config, mediaType, genreKey, res, uuid = null) {
   const geminiData = await geminiRes.json();
   const rawText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
-  let suggestions;
+  let parsed;
   try {
     const jsonMatch = rawText.match(/\[[\s\S]*\]/);
-    suggestions = JSON.parse(jsonMatch ? jsonMatch[0] : rawText);
+    parsed = JSON.parse(jsonMatch ? jsonMatch[0] : rawText);
   } catch {
     return res.json({ metas: [] });
   }
 
-  // Look up each suggestion in Trakt in parallel
-  const searchType = isShow ? 'show' : 'movie';
-  const lookups = await Promise.allSettled(
-    suggestions.slice(0, 20).map(async ({ title, year }) => {
-      const query = encodeURIComponent(title);
-      const url = `${TRAKT_BASE}/search/${searchType}?query=${query}&years=${year}&limit=1&extended=full`;
-      const searchRes = await fetch(url, { headers });
-      if (!searchRes.ok) return null;
-      const results = await searchRes.json();
-      if (!results || results.length === 0) return null;
-      const item = results[0][searchType];
-      if (!item || !item.ids?.imdb) return null;
-      return {
-        id: item.ids.imdb,
-        type: mediaType,
-        name: item.title,
-        poster: rpdbPoster(item.ids.imdb),
-        releaseInfo: item.year ? String(item.year) : undefined,
-        description: item.overview || undefined,
-        imdbRating: item.rating ? item.rating.toFixed(1) : undefined,
-        genres: item.genres || undefined,
-      };
-    })
-  );
+  const imdbIds = parsed.filter(id => typeof id === 'string' && /^tt\d+$/.test(id));
 
-  const metas = lookups
-    .filter(r => r.status === 'fulfilled' && r.value)
-    .map(r => r.value);
-
-  if (redis && cacheKey && metas.length > 0) {
-    try { await redis.set(cacheKey, JSON.stringify(metas), { ex: 86400 }); } catch { /* non-fatal */ }
+  if (redis && cacheKey && imdbIds.length > 0) {
+    try { await redis.set(cacheKey, JSON.stringify(imdbIds), { ex: 86400 }); } catch { /* non-fatal */ }
   }
 
   res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
-  return res.json({ metas });
+  return res.json({ metas: imdbIds.slice(0, 20).map(id => ({ id, type: mediaType })) });
 }
 
 // ── AI Search ─────────────────────────────────────────────────
@@ -327,16 +311,21 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
   if (redis && cacheKey) {
     try {
       const cached = await redis.get(cacheKey);
-      if (cached) return res.json({ metas: typeof cached === 'string' ? JSON.parse(cached) : cached });
+      if (cached) {
+        const data = typeof cached === 'string' ? JSON.parse(cached) : cached;
+        // Normalize: old format is object[], new format is string[]
+        const ids = (data.length > 0 && typeof data[0] !== 'string')
+          ? data.map(m => m.id).filter(Boolean)
+          : data;
+        return res.json({ metas: ids.map(id => ({ id, type: mediaType })) });
+      }
     } catch { /* non-fatal */ }
   }
 
   const isShow = mediaType === 'series';
   const mediaLabel = isShow ? 'TV shows' : 'movies';
-  const searchType = isShow ? 'show' : 'movie';
-  const headers = traktHeaders(config.clientId, config.accessToken);
 
-  const prompt = `You are a ${mediaLabel} search engine that understands natural language queries.\n\nThe user searched for: "${query.trim()}"\n\nReturn exactly 10 ${mediaLabel} that best match this search. Interpret the query broadly — include titles, themes, time periods, styles, and subgenres that fit.\n\nReturn ONLY a valid JSON array, no other text:\n[{"title": "Title Here", "year": 2020}, ...]`;
+  const prompt = `You are a ${mediaLabel} search engine that understands natural language queries.\n\nThe user searched for: "${query.trim()}"\n\nReturn exactly 10 ${mediaLabel} that best match this search. Interpret the query broadly — include titles, themes, time periods, styles, and subgenres that fit.\n\nReturn ONLY a valid JSON array of 10 IMDb IDs, no other text:\n["tt1234567", "tt2345678", ...]`;
 
   const geminiRes = await fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
     method: 'POST',
@@ -348,42 +337,22 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
   const geminiData = await geminiRes.json();
   const rawText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
-  let suggestions;
+  let parsed;
   try {
     const jsonMatch = rawText.match(/\[[\s\S]*\]/);
-    suggestions = JSON.parse(jsonMatch ? jsonMatch[0] : rawText);
+    parsed = JSON.parse(jsonMatch ? jsonMatch[0] : rawText);
   } catch {
     return res.json({ metas: [] });
   }
 
-  const lookups = await Promise.allSettled(
-    suggestions.slice(0, 10).map(async ({ title, year }) => {
-      const q = encodeURIComponent(title);
-      const url = `${TRAKT_BASE}/search/${searchType}?query=${q}&years=${year}&limit=1`;
-      const r = await fetch(url, { headers });
-      if (!r.ok) return null;
-      const results = await r.json();
-      if (!results?.length) return null;
-      const item = results[0][searchType];
-      if (!item?.ids?.imdb) return null;
-      return {
-        id: item.ids.imdb,
-        type: mediaType,
-        name: item.title,
-        poster: rpdbPoster(item.ids.imdb),
-        releaseInfo: item.year ? String(item.year) : undefined,
-      };
-    })
-  );
+  const imdbIds = parsed.filter(id => typeof id === 'string' && /^tt\d+$/.test(id));
 
-  const metas = lookups.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
-
-  if (redis && cacheKey && metas.length > 0) {
-    try { await redis.set(cacheKey, JSON.stringify(metas), { ex: 3600 }); } catch { /* non-fatal */ }
+  if (redis && cacheKey && imdbIds.length > 0) {
+    try { await redis.set(cacheKey, JSON.stringify(imdbIds), { ex: 3600 }); } catch { /* non-fatal */ }
   }
 
   res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
-  return res.json({ metas });
+  return res.json({ metas: imdbIds.map(id => ({ id, type: mediaType })) });
 }
 
 // ── Meta ──────────────────────────────────────────────────────
@@ -569,7 +538,8 @@ async function handleCatalog(config, type, id, extra, res, uuid = null) {
         const parts = id.split('-');
         const aiMediaType = parts[1] === 'show' ? 'series' : parts[1];
         const genreKey = parts[2] || 'overall';
-        return await handleAICatalog(config, aiMediaType, genreKey, res, cacheId);
+        const skip = parseInt(params.skip) || 0;
+        return await handleAICatalog(config, aiMediaType, genreKey, skip, res, cacheId);
       }
       return res.json({ metas: [] });
     }
