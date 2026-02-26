@@ -186,6 +186,16 @@ function handleManifest(config, res) {
     );
   }
 
+  // Always append AI search catalogs when Gemini key is configured
+  if (config?.geminiKey) {
+    for (const id of ['ai-search-movie', 'ai-search-series']) {
+      if (!catalogs.some(c => c.id === id)) {
+        const def = ALL_CATALOG_DEFS.find(c => c.id === id);
+        if (def) catalogs.push(def);
+      }
+    }
+  }
+
   return res.json({
     id: 'com.zachr.trakt.recommendations',
     version: '2.0.0',

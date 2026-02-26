@@ -103,10 +103,8 @@
         const ALL_AI_CATALOG_DEFS = [
           ...MOVIE_GENRE_KEYS.map(k => ({ id: `ai-movie-${k}`, type: 'movie',  name: k === 'overall' ? 'AI Movie Picks' : `AI ${GENRE_DEFS.find(g=>g.key===k)?.label} Movies`, icon: GENRE_DEFS.find(g=>g.key===k)?.icon || 'Sparkles', requiresGemini: true })),
           ...SHOW_GENRE_KEYS.map(k  => ({ id: `ai-show-${k}`,  type: 'series', name: k === 'overall' ? 'AI Show Picks'  : `AI ${GENRE_DEFS.find(g=>g.key===k)?.label} Shows`,  icon: GENRE_DEFS.find(g=>g.key===k)?.icon || 'Sparkles', requiresGemini: true })),
-          { id: 'ai-movie-gems',    type: 'movie',  name: 'Hidden Gem Movies', desc: 'Underrated picks matching your taste', icon: 'Gem',    requiresGemini: true },
-          { id: 'ai-show-gems',     type: 'series', name: 'Hidden Gem Shows',  desc: 'Underrated shows matching your taste', icon: 'Gem',    requiresGemini: true },
-          { id: 'ai-search-movie',  type: 'movie',  name: 'AI Movie Search',   desc: 'Search any movie by feel or theme',    icon: 'Search', requiresGemini: true },
-          { id: 'ai-search-series', type: 'series', name: 'AI Show Search',    desc: 'Search any show by feel or theme',     icon: 'Search', requiresGemini: true },
+          { id: 'ai-movie-gems',    type: 'movie',  name: 'Hidden Gem Movies', desc: 'Underrated picks matching your taste', icon: 'Gem', requiresGemini: true },
+          { id: 'ai-show-gems',     type: 'series', name: 'Hidden Gem Shows',  desc: 'Underrated shows matching your taste', icon: 'Gem', requiresGemini: true },
         ];
         const STANDARD_MOVIE_IDS = ['trakt-watchlist','trakt-trending','trakt-popular','trakt-anticipated','trakt-boxoffice','trakt-recommended'];
         const STANDARD_SHOW_IDS  = ['trakt-watchlist-shows','trakt-trending-shows','trakt-popular-shows','trakt-anticipated-shows','trakt-recommended-shows'];
