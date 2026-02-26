@@ -1,24 +1,11 @@
 const RD_BASE = 'https://api.real-debrid.com/rest/1.0';
 
-function corsHeaders() {
-  return {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, X-RD-Token',
-  };
-}
-
 export default async function handler(req, res) {
-  // Handle CORS preflight
+  // Handle CORS preflight (vercel.json supplies the CORS headers)
   if (req.method === 'OPTIONS') {
-    res.writeHead(204, corsHeaders());
+    res.writeHead(204);
     return res.end();
   }
-
-  // Set CORS headers on all responses
-  Object.entries(corsHeaders()).forEach(([key, value]) => {
-    res.setHeader(key, value);
-  });
 
   // Check for auth token
   const token = req.headers['x-rd-token'];
