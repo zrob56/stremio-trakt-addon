@@ -665,7 +665,8 @@ export default async function handler(req, res) {
   }
 
   if (!config || !config.accessToken || (!config.clientId && !process.env.TRAKT_CLIENT_ID)) {
-    return res.status(400).json({ metas: [] });
+    if (resource === 'meta') return res.json({ meta: null });
+    return res.json({ metas: [] });
   }
 
   if (resource === 'catalog') {
