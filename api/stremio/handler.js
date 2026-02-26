@@ -274,7 +274,7 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
 
   // Watched-but-not-rated = secondary positive signal (user watched it, implied interest)
   const ratedTitleSet = new Set([...topRated.map(t => t.title), ...disliked.map(d => d.title)]);
-  const watchedNotRated = watchedTitles.filter(t => !ratedTitleSet.has(t)).slice(0, 40);
+  const watchedNotRated = watchedTitles.filter(t => !ratedTitleSet.has(t)).slice(0, 50);
 
   // Filter user-excluded titles from positive signal (still kept in allSeenList so they won't be recommended)
   const excluded = new Set(config.excludedFromFeed || []);
@@ -282,8 +282,9 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
   const watchedNotRatedActive = watchedNotRated.filter(t => !excluded.has(t));
 
   const ratedList    = topRatedActive.slice(0, 25).map(m => m.title).join(', ') || 'None';
-  const watchedList  = watchedNotRatedActive.slice(0, 20).join(', ') || 'None';
+  const watchedList  = watchedNotRatedActive.slice(0, 30).join(', ') || 'None';
   const dislikedList = disliked.slice(0, 15).map(m => `${m.title} (${m.year})`).join(', ') || 'None';
+  const dislikedClause = disliked.length > 0 ? `\nDisliked: ${dislikedList}` : '';
   const mediaLabel   = isShow ? 'TV shows' : 'movies';
   const isGems       = genreKey === 'gems';
   const genreLabel   = (!isGems && GENRE_LABELS[genreKey]) || null;
@@ -293,14 +294,14 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
     : '';
 
   const prompt = isGems
-    ? `You are a hidden gems ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 20 underrated, obscure, or cult classic ${mediaLabel} matching the user's taste — NOT mainstream blockbusters, franchises, or well-known Oscar winners. Do not recommend anything from the lists above.${customClause}\nReturn ONLY a valid JSON array of 20 IMDb IDs, no other text:\n["tt1234567", "tt2345678", ...]`
-    : `You are a ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 20 ${mediaLabel}${genreClause} matching the user's taste. Do not recommend anything from the lists above.${customClause}\nReturn ONLY a valid JSON array of 20 IMDb IDs, no other text:\n["tt1234567", "tt2345678", ...]`;
+    ? `Liked: ${ratedList}\nWatched: ${watchedList}${dislikedClause}\nRecommend 20 underrated, obscure, or cult ${mediaLabel} matching this taste — NOT mainstream blockbusters, franchises, or Oscar winners. Don't recommend anything above.${customClause}\nReturn JSON array of 20 IMDb IDs: ["tt...", ...]`
+    : `Liked: ${ratedList}\nWatched: ${watchedList}${dislikedClause}\nRecommend 20 ${mediaLabel}${genreClause} matching this taste. Don't recommend anything above.${customClause}\nReturn JSON array of 20 IMDb IDs: ["tt...", ...]`;
 
   // Call Gemini
   const geminiRes = await fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature } }),
+    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature, maxOutputTokens: 250, responseMimeType: 'application/json' } }),
   });
   if (!geminiRes.ok) return res.json({ metas: [] });
 
@@ -309,8 +310,7 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
 
   let parsed;
   try {
-    const jsonMatch = rawText.match(/\[[\s\S]*\]/);
-    parsed = JSON.parse(jsonMatch ? jsonMatch[0] : rawText);
+    parsed = JSON.parse(rawText);
   } catch {
     return res.json({ metas: [] });
   }
@@ -349,12 +349,12 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
   const isShow = mediaType === 'series';
   const mediaLabel = isShow ? 'TV shows' : 'movies';
 
-  const prompt = `You are a ${mediaLabel} search engine that understands natural language queries.\n\nThe user searched for: "${query.trim()}"\n\nReturn exactly 10 ${mediaLabel} that best match this search. Interpret the query broadly — include titles, themes, time periods, styles, and subgenres that fit.\n\nReturn ONLY a valid JSON array of 10 IMDb IDs, no other text:\n["tt1234567", "tt2345678", ...]`;
+  const prompt = `User searched: "${query.trim()}"\nRecommend 10 ${mediaLabel} matching this — include titles, themes, time periods, styles, subgenres.\nReturn JSON array of 10 IMDb IDs: ["tt...", ...]`;
 
   const geminiRes = await fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7 } }),
+    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7, maxOutputTokens: 150, responseMimeType: 'application/json' } }),
   });
   if (!geminiRes.ok) return res.json({ metas: [] });
 
@@ -363,8 +363,7 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
 
   let parsed;
   try {
-    const jsonMatch = rawText.match(/\[[\s\S]*\]/);
-    parsed = JSON.parse(jsonMatch ? jsonMatch[0] : rawText);
+    parsed = JSON.parse(rawText);
   } catch {
     return res.json({ metas: [] });
   }
