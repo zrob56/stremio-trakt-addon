@@ -130,11 +130,11 @@ const SHOW_GENRE_KEYS  = ['overall','action','adventure','animation','comedy','c
 const AI_CATALOG_DEFS = [
   ...MOVIE_GENRE_KEYS.map(g => ({
     type: 'movie', id: `ai-movie-${g}`, extra: [{ name: 'skip', isRequired: false }],
-    name: g === 'overall' ? 'Movie Picks' : `${GENRE_LABELS[g]} Movies`,
+    name: g === 'overall' ? 'Movie Picks' : `${GENRE_LABELS[g]}`,
   })),
   ...SHOW_GENRE_KEYS.map(g => ({
     type: 'series', id: `ai-show-${g}`, extra: [{ name: 'skip', isRequired: false }],
-    name: g === 'overall' ? 'Show Picks' : `${GENRE_LABELS[g]} Shows`,
+    name: g === 'overall' ? 'Show Picks' : `${GENRE_LABELS[g]}`,
   })),
   { type: 'movie',  id: 'ai-movie-gems',    extra: [{ name: 'skip', isRequired: false }],     name: 'Hidden Gem Movies' },
   { type: 'series', id: 'ai-show-gems',     extra: [{ name: 'skip', isRequired: false }],     name: 'Hidden Gem Shows'  },
