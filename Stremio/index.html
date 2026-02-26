@@ -329,7 +329,11 @@
                         let pollStatus, tokens;
 
                         if (sharedApp) {
-                            const res = await fetch(`/api/stremio/auth?action=poll&deviceCode=${encodeURIComponent(deviceCode)}`);
+                            const res = await fetch('/api/stremio/auth?action=poll', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ clientId, clientSecret, deviceCode }),
+                            });
                             const data = await res.json();
                             pollStatus = data.status;
                             if (pollStatus === 'success') tokens = { accessToken: data.accessToken, refreshToken: data.refreshToken };

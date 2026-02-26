@@ -36,10 +36,9 @@ async function handleStart(req, res) {
 }
 
 async function handlePoll(req, res) {
-  const url = new URL(req.url, `http://${req.headers.host}`);
-  const clientId = url.searchParams.get('clientId') || process.env.TRAKT_CLIENT_ID;
-  const clientSecret = url.searchParams.get('clientSecret') || process.env.TRAKT_CLIENT_SECRET;
-  const deviceCode = url.searchParams.get('deviceCode');
+  const { clientId: bodyClientId, clientSecret: bodyClientSecret, deviceCode } = req.body || {};
+  const clientId = bodyClientId || process.env.TRAKT_CLIENT_ID;
+  const clientSecret = bodyClientSecret || process.env.TRAKT_CLIENT_SECRET;
 
   if (!clientId || !deviceCode) {
     return res.status(400).json({ error: 'clientId and deviceCode are required' });
@@ -91,9 +90,9 @@ export default async function handler(req, res) {
   if (action === 'start' && req.method === 'POST') {
     return handleStart(req, res);
   }
-  if (action === 'poll' && req.method === 'GET') {
+  if (action === 'poll' && req.method === 'POST') {
     return handlePoll(req, res);
   }
 
-  return res.status(400).json({ error: 'Use ?action=start (POST) or ?action=poll (GET)' });
+  return res.status(400).json({ error: 'Use ?action=start (POST) or ?action=poll (POST)' });
 }
