@@ -256,10 +256,9 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
   const topRatedActive        = topRated.filter(t => !excluded.has(t.title));
   const watchedNotRatedActive = watchedNotRated.filter(t => !excluded.has(t));
 
-  const ratedList    = topRatedActive.map(m => `- ${m.title} (${m.year})`).join('\n') || 'None';
-  const watchedList  = watchedNotRatedActive.map(t => `- ${t}`).join('\n') || 'None';
-  const allSeenList  = [...topRated.map(t => t.title), ...watchedTitles].slice(0, 60).map(t => `- ${t}`).join('\n') || 'None';
-  const dislikedList = disliked.map(m => `- ${m.title} (${m.year})`).join('\n') || 'None';
+  const ratedList    = topRatedActive.slice(0, 25).map(m => m.title).join(', ') || 'None';
+  const watchedList  = watchedNotRatedActive.slice(0, 20).join(', ') || 'None';
+  const dislikedList = disliked.slice(0, 15).map(m => `${m.title} (${m.year})`).join(', ') || 'None';
   const mediaLabel   = isShow ? 'TV shows' : 'movies';
   const isGems       = genreKey === 'gems';
   const genreLabel   = (!isGems && GENRE_LABELS[genreKey]) || null;
@@ -269,8 +268,8 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
     : '';
 
   const prompt = isGems
-    ? `You are a hidden gems ${mediaLabel} recommendation engine.\n\nThe user has rated these ${mediaLabel} highly (7-10/10):\n${ratedList}\n\nThey have also watched these (treat as enjoyed):\n${watchedList}\n\nDo NOT recommend anything already seen:\n${allSeenList}\n\nAvoid anything similar to these disliked titles:\n${dislikedList}\n\nRecommend exactly 60 ${mediaLabel} that are underrated, obscure, or cult classics — NOT mainstream blockbusters, popular franchises, or well-known Oscar winners. They should genuinely match the user's taste in themes and style, but be titles most casual viewers haven't heard of.${customClause}\nReturn ONLY a valid JSON array of 60 IMDb IDs, no other text:\n["tt1234567", "tt2345678", ...]`
-    : `You are a ${mediaLabel} recommendation engine.\n\nThe user has rated these ${mediaLabel} highly (7-10/10):\n${ratedList}\n\nThey have also watched these (treat as enjoyed — use as positive signal):\n${watchedList}\n\nDo NOT recommend anything from either list above (already seen):\n${allSeenList}\n\nThe user disliked these (rated 1-6/10) — avoid anything similar in tone, genre, or style:\n${dislikedList}\n\nRecommend exactly 60 ${mediaLabel}${genreClause} they would likely enjoy that are NOT in the already-seen list. Focus on similar themes, tone, directors, or genres.${customClause}\nReturn ONLY a valid JSON array of 60 IMDb IDs, no other text:\n["tt1234567", "tt2345678", ...]`;
+    ? `You are a hidden gems ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 60 underrated, obscure, or cult classic ${mediaLabel} matching the user's taste — NOT mainstream blockbusters, franchises, or well-known Oscar winners. Do not recommend anything from the lists above.${customClause}\nReturn ONLY a valid JSON array of 60 IMDb IDs, no other text:\n["tt1234567", "tt2345678", ...]`
+    : `You are a ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 60 ${mediaLabel}${genreClause} matching the user's taste. Do not recommend anything from the lists above.${customClause}\nReturn ONLY a valid JSON array of 60 IMDb IDs, no other text:\n["tt1234567", "tt2345678", ...]`;
 
   // Call Gemini
   const geminiRes = await fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
