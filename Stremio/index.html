@@ -108,6 +108,9 @@
           { id: 'ai-search-movie',  type: 'movie',  name: 'AI Movie Search',   desc: 'Search any movie by feel or theme',    icon: 'Search', requiresGemini: true },
           { id: 'ai-search-series', type: 'series', name: 'AI Show Search',    desc: 'Search any show by feel or theme',     icon: 'Search', requiresGemini: true },
         ];
+        const STANDARD_MOVIE_IDS = ['trakt-watchlist','trakt-trending','trakt-popular','trakt-anticipated','trakt-boxoffice','trakt-recommended'];
+        const STANDARD_SHOW_IDS  = ['trakt-watchlist-shows','trakt-trending-shows','trakt-popular-shows','trakt-anticipated-shows','trakt-recommended-shows'];
+
         const CATALOG_DEFS = [...UTILITY_CATALOG_DEFS, ...ALL_AI_CATALOG_DEFS];
         const DEFAULT_CATALOGS = ['ai-movie-overall', 'ai-show-overall', 'trakt-watchlist', 'trakt-watchlist-shows', 'trakt-trending', 'trakt-trending-shows'];
 
@@ -654,117 +657,17 @@
             );
         }
 
-        // ─── Genre Picker ───────────────────────────────────────────
-        function GenrePicker({ enabledCatalogs, onChange, geminiKey }) {
-            const hasGemini = !!geminiKey;
-
-            const toggleId = (id) =>
-                onChange(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
-
-            const renderGenreChip = (key, prefix) => {
-                const id = `${prefix}-${key}`;
-                const def = GENRE_DEFS.find(g => g.key === key);
-                const active = enabledCatalogs.includes(id);
-                const locked = !hasGemini;
-                return (
-                    <button
-                        key={id}
-                        onClick={() => !locked && toggleId(id)}
-                        disabled={locked}
-                        title={locked ? 'Requires Gemini API key' : def?.label}
-                        className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition border ${
-                            locked
-                                ? 'opacity-30 cursor-not-allowed border-neutral-800 text-neutral-600'
-                                : active
-                                    ? 'bg-trakt-600 border-trakt-600 text-white'
-                                    : 'bg-neutral-800/60 border-neutral-700/50 text-neutral-400 hover:border-neutral-600 hover:text-neutral-200'
-                        }`}
-                    >
-                        <Icon name={def?.icon || 'Film'} size={13} />
-                        {def?.label || key}
-                    </button>
-                );
-            };
-
-            const renderUtilityToggle = (cat) => {
-                const active = enabledCatalogs.includes(cat.id);
-                return (
-                    <button
-                        key={cat.id}
-                        onClick={() => toggleId(cat.id)}
-                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border transition text-left ${
-                            active
-                                ? 'bg-neutral-700/60 border-neutral-600 text-neutral-200'
-                                : 'bg-neutral-800/40 border-neutral-700/50 text-neutral-400 hover:bg-neutral-800'
-                        }`}
-                    >
-                        <Icon name={cat.icon} size={14} className={active ? 'text-neutral-300' : 'text-neutral-500'} />
-                        <div className="flex-1 min-w-0">
-                            <span className="text-sm">{cat.name}</span>
-                            <span className="text-xs text-neutral-500 ml-2">{cat.desc}</span>
-                        </div>
-                        <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${active ? 'bg-neutral-500 border-neutral-500' : 'border-neutral-600'}`}>
-                            {active && <Icon name="Check" size={10} className="text-white" />}
-                        </div>
-                    </button>
-                );
-            };
-
-            const movieUtility = UTILITY_CATALOG_DEFS.filter(c => c.type === 'movie');
-            const showUtility  = UTILITY_CATALOG_DEFS.filter(c => c.type === 'series');
-
-            return (
-                <div className="space-y-4">
-                    {!hasGemini && (
-                        <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg px-4 py-3 text-xs text-amber-300">
-                            Add a Gemini API key to unlock AI genre catalogs.
-                        </div>
-                    )}
-
-                    <div className="grid grid-cols-2 gap-4">
-                        {/* ── Movies ── */}
-                        <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 space-y-3">
-                            <div className="flex items-center gap-2 pb-2 border-b border-neutral-800">
-                                <Icon name="Film" size={14} className="text-trakt-400" />
-                                <p className="text-sm font-semibold text-neutral-200">Movies</p>
-                            </div>
-                            <div className="flex flex-wrap gap-1.5">
-                                {MOVIE_GENRE_KEYS.map(k => renderGenreChip(k, 'ai-movie'))}
-                            </div>
-                            <div className="space-y-1.5 pt-1">
-                                {movieUtility.map(renderUtilityToggle)}
-                            </div>
-                        </div>
-
-                        {/* ── Shows ── */}
-                        <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 space-y-3">
-                            <div className="flex items-center gap-2 pb-2 border-b border-neutral-800">
-                                <Icon name="Tv" size={14} className="text-blue-400" />
-                                <p className="text-sm font-semibold text-neutral-200">Shows</p>
-                            </div>
-                            <div className="flex flex-wrap gap-1.5">
-                                {SHOW_GENRE_KEYS.map(k => renderGenreChip(k, 'ai-show'))}
-                            </div>
-                            <div className="space-y-1.5 pt-1">
-                                {showUtility.map(renderUtilityToggle)}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            );
-        }
-
         // ─── Catalog Toggle List ────────────────────────────────────
-        function CatalogToggleList({ enabledCatalogs, onChange, geminiKey }) {
-            const dragId  = useRef(null);   // ID of item being dragged
-            const dropId  = useRef(null);   // ID of item currently hovered
+        function CatalogToggleList({ enabledCatalogs, setEnabledCatalogs, geminiKey, traktLists = [], traktListsLoading = false }) {
+            const dragId  = useRef(null);
+            const dropId  = useRef(null);
             const [draggingId, setDraggingId] = useState(null);
             const [overId, setOverId]         = useState(null);
             const enabledRef = useRef(enabledCatalogs);
             useEffect(() => { enabledRef.current = enabledCatalogs; }, [enabledCatalogs]);
 
-            const activeCatalogs    = enabledCatalogs.map(id => CATALOG_DEFS.find(c => c.id === id)).filter(Boolean);
-            const availableCatalogs = CATALOG_DEFS.filter(c => !enabledCatalogs.includes(c.id));
+            const [openGroups, setOpenGroups] = useState({ standard: false, aiMovies: false, aiShows: false, traktLists: false });
+            const toggleGroup = (key) => setOpenGroups(prev => ({ ...prev, [key]: !prev[key] }));
 
             const handleDragStart = (e, id) => {
                 dragId.current = id;
@@ -782,13 +685,13 @@
                 const fromId = dragId.current;
                 const toId   = dropId.current;
                 if (fromId && toId && fromId !== toId) {
-                    const list     = [...enabledRef.current];
-                    const fromIdx  = list.indexOf(fromId);
-                    const toIdx    = list.indexOf(toId);
+                    const list    = [...enabledRef.current];
+                    const fromIdx = list.indexOf(fromId);
+                    const toIdx   = list.indexOf(toId);
                     if (fromIdx !== -1 && toIdx !== -1) {
                         const [item] = list.splice(fromIdx, 1);
                         list.splice(toIdx, 0, item);
-                        onChange(list);
+                        setEnabledCatalogs(list);
                     }
                 }
                 dragId.current = null;
@@ -797,8 +700,70 @@
                 setOverId(null);
             };
 
-            const disable = (id) => onChange(prev => prev.filter(x => x !== id));
-            const enable  = (id) => onChange(prev => [...prev, id]);
+            const disable = (id) => setEnabledCatalogs(prev => prev.filter(x => x !== id));
+            const enable  = (id) => setEnabledCatalogs(prev => [...prev, id]);
+
+            // Build active display objects — handle trakt-list-* specially
+            const activeCatalogs = enabledCatalogs.map(id => {
+                if (id.startsWith('trakt-list-')) {
+                    const slug = id.replace(/^trakt-list-/, '');
+                    const list = traktLists.find(l => l.slug === slug);
+                    return { id, name: list ? list.name : slug, icon: 'List' };
+                }
+                return CATALOG_DEFS.find(c => c.id === id);
+            }).filter(Boolean);
+
+            // Available items per group (exclude already-enabled)
+            const standardAvail = [...STANDARD_MOVIE_IDS, ...STANDARD_SHOW_IDS]
+                .map(id => UTILITY_CATALOG_DEFS.find(c => c.id === id))
+                .filter(c => c && !enabledCatalogs.includes(c.id));
+            const aiMovieAvail = ALL_AI_CATALOG_DEFS
+                .filter(c => c.type === 'movie' && !enabledCatalogs.includes(c.id));
+            const aiShowAvail = ALL_AI_CATALOG_DEFS
+                .filter(c => c.type === 'series' && !enabledCatalogs.includes(c.id));
+            const traktListAvail = traktLists.filter(l => !enabledCatalogs.includes(`trakt-list-${l.slug}`));
+
+            const renderAvailItem = (cat) => {
+                const locked = cat.requiresGemini && !geminiKey;
+                return (
+                    <div
+                        key={cat.id}
+                        onClick={() => !locked && enable(cat.id)}
+                        title={locked ? 'Requires Gemini API key' : undefined}
+                        className={`flex items-center gap-3 p-2.5 pl-8 rounded-lg border transition ${
+                            locked
+                                ? 'border-neutral-800 opacity-40 cursor-not-allowed'
+                                : 'bg-neutral-800/40 border-neutral-700/50 hover:border-neutral-600 cursor-pointer'
+                        }`}
+                    >
+                        <div className="w-6 h-6 rounded flex items-center justify-center flex-shrink-0 bg-neutral-700/50">
+                            <Icon name={cat.icon || 'Film'} size={12} className="text-neutral-500" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                            <p className="text-xs font-medium text-neutral-400">{cat.name}</p>
+                            {locked && <p className="text-xs text-neutral-600">Requires Gemini API key</p>}
+                        </div>
+                        {!locked && <Icon name="Plus" size={13} className="text-neutral-600 flex-shrink-0" />}
+                    </div>
+                );
+            };
+
+            const renderGroup = (key, label, count, children) => {
+                const isOpen = openGroups[key];
+                return (
+                    <div key={key} className="border-b border-neutral-800 last:border-b-0">
+                        <button
+                            onClick={() => toggleGroup(key)}
+                            className="w-full flex items-center gap-2 py-2.5 px-3 text-xs font-medium text-neutral-400 hover:text-neutral-200 transition"
+                        >
+                            <Icon name={isOpen ? 'ChevronDown' : 'ChevronRight'} size={12} />
+                            <span className="flex-1 text-left">{label}</span>
+                            <span className="text-neutral-600 font-normal">{count} available</span>
+                        </button>
+                        {isOpen && <div className="space-y-1 px-2 pb-2">{children}</div>}
+                    </div>
+                );
+            };
 
             return (
                 <div className="space-y-4">
@@ -808,7 +773,7 @@
                             Active <span className="text-neutral-600 normal-case font-normal">— drag to reorder</span>
                         </p>
                         {activeCatalogs.length === 0 ? (
-                            <p className="text-xs text-neutral-600 py-3 text-center border border-dashed border-neutral-800 rounded-lg">No catalogs selected</p>
+                            <p className="text-xs text-neutral-600 py-3 text-center border border-dashed border-neutral-800 rounded-lg">No catalogs selected — add some below</p>
                         ) : (
                             <div className="space-y-1.5">
                                 {activeCatalogs.map((cat) => {
@@ -829,11 +794,10 @@
                                                 <Icon name="GripVertical" size={16} />
                                             </span>
                                             <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 bg-trakt-500/20">
-                                                <Icon name={cat.icon} size={13} className="text-trakt-400" />
+                                                <Icon name={cat.icon || 'Film'} size={13} className="text-trakt-400" />
                                             </div>
                                             <div className="flex-1 min-w-0">
                                                 <p className="text-sm font-medium text-neutral-200">{cat.name}</p>
-                                                <p className="text-xs text-neutral-500">{cat.desc}</p>
                                             </div>
                                             <button
                                                 onClick={() => disable(cat.id)}
@@ -849,47 +813,44 @@
                         )}
                     </div>
 
-                    {/* Available catalogs — not draggable, click to add */}
-                    {availableCatalogs.length > 0 && (
-                        <div>
-                            <p className="text-xs font-medium text-neutral-400 uppercase tracking-wide mb-2">Available to add</p>
-                            <div className="space-y-1.5">
-                                {availableCatalogs.map(cat => {
-                                    const locked = cat.requiresGemini && !geminiKey;
-                                    return (
+                    {/* Collapsible groups */}
+                    <div className="border border-neutral-800 rounded-xl overflow-hidden">
+                        {renderGroup('standard', 'Standard Catalogs', standardAvail.length,
+                            standardAvail.map(renderAvailItem)
+                        )}
+                        {renderGroup('aiMovies', 'AI Movie Genres', aiMovieAvail.length,
+                            aiMovieAvail.map(renderAvailItem)
+                        )}
+                        {renderGroup('aiShows', 'AI Show Genres', aiShowAvail.length,
+                            aiShowAvail.map(renderAvailItem)
+                        )}
+                        {renderGroup('traktLists', 'Your Trakt Lists',
+                            traktListsLoading ? '…' : traktListAvail.length,
+                            traktListsLoading
+                                ? [<p key="loading" className="text-xs text-neutral-600 py-2 pl-8">Loading lists…</p>]
+                                : traktListAvail.length === 0
+                                    ? [<p key="empty" className="text-xs text-neutral-600 py-2 pl-8">No lists found on Trakt</p>]
+                                    : traktListAvail.map(l => (
                                         <div
-                                            key={cat.id}
-                                            className={`flex items-center gap-3 p-3 rounded-lg border transition ${locked ? 'border-neutral-800 opacity-40' : 'bg-neutral-800/40 border-neutral-700/50'}`}
+                                            key={l.slug}
+                                            onClick={() => enable(`trakt-list-${l.slug}`)}
+                                            className="flex items-center gap-3 p-2.5 pl-8 rounded-lg border bg-neutral-800/40 border-neutral-700/50 hover:border-neutral-600 cursor-pointer transition"
                                         >
-                                            <span className="w-4 flex-shrink-0" />
-                                            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 bg-neutral-700/50">
-                                                <Icon name={cat.icon} size={13} className="text-neutral-500" />
+                                            <div className="w-6 h-6 rounded flex items-center justify-center flex-shrink-0 bg-neutral-700/50">
+                                                <Icon name="List" size={12} className="text-neutral-500" />
                                             </div>
-                                            <div className="flex-1 min-w-0">
-                                                <p className="text-sm font-medium text-neutral-400">{cat.name}</p>
-                                                <p className="text-xs text-neutral-600">{locked ? 'Requires Gemini API key' : cat.desc}</p>
-                                            </div>
-                                            {!locked && (
-                                                <button
-                                                    onClick={() => enable(cat.id)}
-                                                    className="p-1 text-neutral-600 hover:text-emerald-400 transition flex-shrink-0"
-                                                    title="Add"
-                                                >
-                                                    <Icon name="Plus" size={14} />
-                                                </button>
-                                            )}
+                                            <p className="text-xs font-medium text-neutral-400 flex-1">{l.name}</p>
+                                            <Icon name="Plus" size={13} className="text-neutral-600 flex-shrink-0" />
                                         </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                    )}
+                                    ))
+                        )}
+                    </div>
                 </div>
             );
         }
 
         // ─── Step 4: Install ────────────────────────────────────────
-        function StepInstall({ clientId, clientSecret, geminiKey, tokens, enabledCatalogs, setEnabledCatalogs, onBack, onManage, uuid, onUuidSet }) {
+        function StepInstall({ clientId, clientSecret, geminiKey, tokens, enabledCatalogs, setEnabledCatalogs, onBack, onManage, uuid, onUuidSet, traktLists = [], traktListsLoading = false }) {
             const [copied, setCopied] = useState(false);
             const [toast, setToast] = useState(null);
             const [warmingState, setWarmingState] = useState({ total: 0, done: 0, status: 'idle' });
@@ -910,6 +871,7 @@
                                 accessToken: tokens.accessToken,
                                 refreshToken: tokens.refreshToken,
                                 enabledCatalogs,
+                                ...(traktLists.length > 0 ? { traktLists } : {}),
                             }),
                         });
                         if (res.ok) {
@@ -1053,10 +1015,12 @@
 
                     <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-5">
                         <h3 className="text-sm font-medium text-neutral-300 mb-4">Choose your catalogs:</h3>
-                        <GenrePicker
+                        <CatalogToggleList
                             enabledCatalogs={enabledCatalogs}
-                            onChange={setEnabledCatalogs}
+                            setEnabledCatalogs={setEnabledCatalogs}
                             geminiKey={geminiKey}
+                            traktLists={traktLists}
+                            traktListsLoading={traktListsLoading}
                         />
                     </div>
 
@@ -1313,7 +1277,7 @@
         }
 
         // ─── Step 5: Manage ─────────────────────────────────────────
-        function StepManage({ clientId, clientSecret, geminiKey: initialGeminiKey, initialCustomInstructions, tokens, enabledCatalogs, onCatalogsChange, onReauth, uuid }) {
+        function StepManage({ clientId, clientSecret, geminiKey: initialGeminiKey, initialCustomInstructions, tokens, enabledCatalogs, onCatalogsChange, onReauth, uuid, traktLists = [], traktListsLoading = false }) {
             const [activeTab, setActiveTab] = useState('catalogs');
             const [copied, setCopied] = useState(false);
             const [toast, setToast] = useState(null);
@@ -1348,6 +1312,7 @@
                             ...(geminiKey ? { geminiKey } : {}),
                             ...(customInstructions.trim() ? { customInstructions: customInstructions.trim() } : {}),
                             ...(excludedFromFeed.length > 0 ? { excludedFromFeed } : {}),
+                            ...(traktLists.length > 0 ? { traktLists } : {}),
                             ...overrides,
                         }),
                     });
@@ -1568,10 +1533,12 @@
                     )}
                     {activeTab === 'catalogs' && (
                         <div className="space-y-6">
-                            <GenrePicker
+                            <CatalogToggleList
                                 enabledCatalogs={enabledCatalogs}
-                                onChange={onCatalogsChange}
+                                setEnabledCatalogs={onCatalogsChange}
                                 geminiKey={geminiKey}
+                                traktLists={traktLists}
+                                traktListsLoading={traktListsLoading}
                             />
 
                             {/* Custom AI instructions */}
@@ -1648,16 +1615,6 @@
                                 })()}
                             </div>
 
-                            {enabledCatalogs.length > 0 && (
-                                <div>
-                                    <p className="text-xs font-medium text-neutral-400 uppercase tracking-wide mb-2">Reorder active catalogs</p>
-                                    <CatalogToggleList
-                                        enabledCatalogs={enabledCatalogs}
-                                        onChange={onCatalogsChange}
-                                        geminiKey={geminiKey}
-                                    />
-                                </div>
-                            )}
                             <p className="text-xs text-neutral-500 text-center">
                                 After changing catalogs, copy the updated manifest URL above and reinstall the addon in Stremio.
                             </p>
@@ -1680,6 +1637,8 @@
                 try { return localStorage.getItem('trakt_uuid') || null; } catch { return null; }
             });
             const [sharedApp, setSharedApp] = useState(false);
+            const [traktLists, setTraktLists] = useState([]);
+            const [traktListsLoading, setTraktListsLoading] = useState(false);
 
             useEffect(() => {
                 fetch('/api/stremio/config')
@@ -1687,6 +1646,16 @@
                     .then(d => { if (d.sharedApp) { setSharedApp(true); if (d.clientId) setClientId(d.clientId); } })
                     .catch(() => {});
             }, []);
+
+            useEffect(() => {
+                if (!tokens?.accessToken || !uuid) return;
+                setTraktListsLoading(true);
+                fetch(`/api/stremio/trakt-lists?uuid=${uuid}`)
+                    .then(r => r.json())
+                    .then(data => { if (Array.isArray(data)) setTraktLists(data); })
+                    .catch(() => {})
+                    .finally(() => setTraktListsLoading(false));
+            }, [tokens?.accessToken, uuid]);
 
             const handleUuidSet = useCallback((newUuid) => {
                 setUuid(newUuid);
@@ -1755,6 +1724,8 @@
                                 onCatalogsChange={handleCatalogsChange}
                                 onReauth={handleReauth}
                                 uuid={uuid}
+                                traktLists={traktLists}
+                                traktListsLoading={traktListsLoading}
                             />
                         </div>
                     </div>
@@ -1814,6 +1785,8 @@
                                 onManage={() => setStep(5)}
                                 uuid={uuid}
                                 onUuidSet={handleUuidSet}
+                                traktLists={traktLists}
+                                traktListsLoading={traktListsLoading}
                             />
                         )}
                     </div>

@@ -1,6 +1,6 @@
 import { Redis } from '@upstash/redis';
 
-const TRAKT_BASE = 'https://api.trakt.tv';
+export const TRAKT_BASE = 'https://api.trakt.tv';
 
 class TraktAuthError extends Error {
   constructor(msg) { super(msg); this.name = 'TraktAuthError'; }
@@ -77,7 +77,7 @@ function parseExtra(extraString) {
   return params;
 }
 
-function traktHeaders(clientId, accessToken) {
+export function traktHeaders(clientId, accessToken) {
   return {
     'Content-Type': 'application/json',
     'trakt-api-version': '2',
@@ -87,7 +87,7 @@ function traktHeaders(clientId, accessToken) {
   };
 }
 
-async function traktFetch(url, headers) {
+export async function traktFetch(url, headers) {
   const response = await fetch(url, { headers });
   if (response.status === 401) throw new TraktAuthError('Token expired');
   if (!response.ok) throw new Error(`Trakt API error: ${response.status}`);
@@ -159,10 +159,25 @@ const ALL_CATALOG_DEFS = [
 
 function handleManifest(config, res) {
   let catalogs;
+
+  // Build lookup for user's Trakt list metadata
+  const listMeta = {};
+  for (const l of (config?.traktLists || [])) {
+    listMeta[`trakt-list-${l.slug}`] = l.name;
+  }
+
   if (config?.enabledCatalogs?.length) {
-    catalogs = config.enabledCatalogs
-      .map(id => ALL_CATALOG_DEFS.find(c => c.id === id))
-      .filter(Boolean);
+    catalogs = config.enabledCatalogs.flatMap(id => {
+      if (listMeta[id]) {
+        const name = listMeta[id];
+        return [
+          { type: 'movie',  id: `${id}-movies`, name: `${name} (Movies)`, extra: [{ name: 'skip', isRequired: false }] },
+          { type: 'series', id: `${id}-shows`,  name: `${name} (Shows)`,  extra: [{ name: 'skip', isRequired: false }] },
+        ];
+      }
+      const def = ALL_CATALOG_DEFS.find(c => c.id === id);
+      return def ? [def] : [];
+    });
   } else {
     // Backward compat: utility catalogs + AI overall if gemini key present
     catalogs = ALL_CATALOG_DEFS.filter(c =>
@@ -293,7 +308,7 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
   const imdbIds = parsed.filter(id => typeof id === 'string' && /^tt\d+$/.test(id));
 
   if (redis && cacheKey && imdbIds.length > 0) {
-    try { await redis.set(cacheKey, JSON.stringify(imdbIds), { ex: 86400 }); } catch { /* non-fatal */ }
+    try { await redis.set(cacheKey, JSON.stringify(imdbIds), { ex: 172800 }); } catch { /* non-fatal */ }
   }
 
   res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
@@ -530,6 +545,21 @@ async function handleCatalog(config, type, id, extra, res, uuid = null) {
       break;
     }
     default: {
+      if (id.startsWith('trakt-list-')) {
+        const suffix = id.replace(/^trakt-list-/, '');
+        const isMovies = suffix.endsWith('-movies');
+        const slug = isMovies
+          ? suffix.replace(/-movies$/, '')
+          : suffix.replace(/-shows$/, '');
+        const traktMediaType = isMovies ? 'movies' : 'shows';
+        itemType = isMovies ? 'movie' : 'series';
+        const raw = await traktFetch(
+          `${TRAKT_BASE}/users/me/lists/${slug}/items/${traktMediaType}?extended=full&page=${page}&limit=20`,
+          headers
+        );
+        traktData = raw.map(item => item.movie || item.show);
+        break;
+      }
       if (id.startsWith('ai-') && config.geminiKey) {
         const cacheId = config.traktUsername || uuid;
         if (id === 'ai-search-movie')  return handleAISearch(config, 'movie',  params.search, res, cacheId);
