@@ -221,7 +221,7 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
           ? data.map(m => m.id).filter(Boolean)
           : data;
         const page = ids.slice(skip, skip + 20);
-        return res.json({ metas: page.map(id => ({ id, type: mediaType })) });
+        return res.json({ metas: page.map(id => ({ id, type: mediaType, poster: rpdbPoster(id) })) });
       }
     } catch { /* non-fatal */ }
   }
@@ -312,7 +312,7 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
   }
 
   res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
-  return res.json({ metas: imdbIds.slice(0, 20).map(id => ({ id, type: mediaType })) });
+  return res.json({ metas: imdbIds.slice(0, 20).map(id => ({ id, type: mediaType, poster: rpdbPoster(id) })) });
 }
 
 // ── AI Search ─────────────────────────────────────────────────
@@ -331,7 +331,7 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
         const ids = (data.length > 0 && typeof data[0] !== 'string')
           ? data.map(m => m.id).filter(Boolean)
           : data;
-        return res.json({ metas: ids.map(id => ({ id, type: mediaType })) });
+        return res.json({ metas: ids.map(id => ({ id, type: mediaType, poster: rpdbPoster(id) })) });
       }
     } catch { /* non-fatal */ }
   }
@@ -366,7 +366,7 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
   }
 
   res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
-  return res.json({ metas: imdbIds.map(id => ({ id, type: mediaType })) });
+  return res.json({ metas: imdbIds.map(id => ({ id, type: mediaType, poster: rpdbPoster(id) })) });
 }
 
 // ── Meta ──────────────────────────────────────────────────────
