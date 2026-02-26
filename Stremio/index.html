@@ -447,7 +447,7 @@
         }
 
         // ─── Step 3 / Manage: Browse & Curate ───────────────────────
-        function StepCurate({ clientId, tokens, onNext, mediaType = 'movie' }) {
+        function StepCurate({ clientId, tokens, onNext, onBack, mediaType = 'movie' }) {
             const [recommendations, setRecommendations] = useState([]);
             const [loading, setLoading] = useState(true);
             const [loadingMore, setLoadingMore] = useState(false);
@@ -535,6 +535,12 @@
             return (
                 <div className="space-y-6">
                     {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+
+                    {onBack && (
+                        <button onClick={onBack} className="text-neutral-500 hover:text-neutral-300 text-sm flex items-center gap-1 transition">
+                            <Icon name="ArrowLeft" size={14} /> Back
+                        </button>
+                    )}
 
                     <div className="flex items-center justify-between">
                         <div>
@@ -1776,6 +1782,7 @@
                             <StepCurate
                                 clientId={clientId}
                                 tokens={tokens}
+                                onBack={() => setStep(2)}
                                 onNext={() => setStep(4)}
                             />
                         )}
