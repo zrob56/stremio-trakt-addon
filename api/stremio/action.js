@@ -1,20 +1,19 @@
+import { Redis } from '@upstash/redis';
+
 const TRAKT_BASE = 'https://api.trakt.tv';
 
-function decodeConfig(encoded) {
-  try {
-    const padded = encoded.replace(/-/g, '+').replace(/_/g, '/');
-    const json = Buffer.from(padded, 'base64').toString('utf8');
-    return JSON.parse(json);
-  } catch {
-    return null;
-  }
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function getRedis() {
+  if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) return null;
+  return Redis.fromEnv();
 }
 
 function traktHeaders(clientId, accessToken) {
   return {
     'Content-Type': 'application/json',
     'trakt-api-version': '2',
-    'trakt-api-key': clientId,
+    'trakt-api-key': clientId || process.env.TRAKT_CLIENT_ID,
     'Authorization': `Bearer ${accessToken}`,
     'User-Agent': 'stremio-trakt-addon/1.0',
   };
@@ -63,10 +62,24 @@ export default async function handler(req, res) {
   const action = url.searchParams.get('a');
   const type = url.searchParams.get('type') || 'movie';
   const imdbId = url.searchParams.get('id');
-  const configEncoded = url.searchParams.get('config');
+  const uuid = url.searchParams.get('uuid');
 
-  const config = decodeConfig(configEncoded);
-  if (!config || !config.accessToken || !config.clientId) {
+  if (!uuid || !UUID_REGEX.test(uuid)) {
+    return res.status(400).send(htmlPage('Configuration Error', '⚠️', 'Invalid or missing addon configuration.', '#ef4444'));
+  }
+  const redis = getRedis();
+  if (!redis) {
+    return res.status(500).send(htmlPage('Configuration Error', '⚠️', 'Server configuration error.', '#ef4444'));
+  }
+  let config;
+  try {
+    const raw = await redis.get(`user:${uuid}`);
+    if (!raw) throw new Error('Not found');
+    config = typeof raw === 'string' ? JSON.parse(raw) : raw;
+  } catch {
+    return res.status(400).send(htmlPage('Configuration Error', '⚠️', 'Invalid or missing addon configuration.', '#ef4444'));
+  }
+  if (!config.accessToken || (!config.clientId && !process.env.TRAKT_CLIENT_ID)) {
     return res.status(400).send(htmlPage('Configuration Error', '⚠️', 'Invalid or missing addon configuration.', '#ef4444'));
   }
 

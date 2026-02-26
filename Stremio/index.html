@@ -1232,7 +1232,7 @@
         }
 
         // ─── Watchlist Tab ───────────────────────────────────────────
-        function WatchlistTab({ clientId, tokens, configEncoded }) {
+        function WatchlistTab({ clientId, tokens, uuid }) {
             const [movies, setMovies] = useState(null);
             const [shows, setShows] = useState(null);
             const [mediaTab, setMediaTab] = useState('movies');
@@ -1262,7 +1262,7 @@
             const removeItem = useCallback(async (imdbId, type) => {
                 setRemoving(prev => new Set([...prev, imdbId]));
                 try {
-                    const url = `/api/stremio/action?a=unwatchlist&type=${type}&id=${imdbId}&config=${encodeURIComponent(configEncoded)}`;
+                    const url = `/api/stremio/action?a=unwatchlist&type=${type}&id=${imdbId}&uuid=${uuid}`;
                     const r = await fetch(url);
                     if (r.ok) {
                         if (type === 'movie') setMovies(prev => prev.filter(i => i.movie.ids.imdb !== imdbId));
@@ -1276,7 +1276,7 @@
                 } finally {
                     setRemoving(prev => { const n = new Set(prev); n.delete(imdbId); return n; });
                 }
-            }, [configEncoded]);
+            }, [uuid]);
 
             const loading = movies === null || shows === null;
             const items = mediaTab === 'movies'
@@ -1546,7 +1546,7 @@
                         <SearchTab clientId={clientId} tokens={tokens} />
                     )}
                     {activeTab === 'watchlist' && (
-                        <WatchlistTab clientId={clientId} tokens={tokens} configEncoded={configEncoded} />
+                        <WatchlistTab clientId={clientId} tokens={tokens} uuid={uuid} />
                     )}
                     {activeTab === 'catalogs' && (
                         <div className="space-y-6">

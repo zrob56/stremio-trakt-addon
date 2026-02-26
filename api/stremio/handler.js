@@ -6,7 +6,7 @@ class TraktAuthError extends Error {
   constructor(msg) { super(msg); this.name = 'TraktAuthError'; }
 }
 
-// ── Config resolution (UUID → KV lookup, or legacy base64 decode) ──────────
+// ── Config resolution (UUID → KV lookup) ──────────────────────
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -15,32 +15,19 @@ function getRedis() {
   return Redis.fromEnv();
 }
 
-function decodeConfig(encoded) {
-  try {
-    const padded = encoded.replace(/-/g, '+').replace(/_/g, '/');
-    const json = Buffer.from(padded, 'base64').toString('utf8');
-    return JSON.parse(json);
-  } catch {
-    return null;
-  }
-}
-
 async function resolveConfig(encoded) {
   if (!encoded) return { config: null, uuid: null };
-  if (UUID_REGEX.test(encoded)) {
-    const redis = getRedis();
-    if (!redis) return { config: null, uuid: null };
-    try {
-      const raw = await redis.get(`user:${encoded}`);
-      if (!raw) return { config: null, uuid: null };
-      const config = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      return { config, uuid: encoded };
-    } catch {
-      return { config: null, uuid: null };
-    }
+  if (!UUID_REGEX.test(encoded)) return { config: null, uuid: null };
+  const redis = getRedis();
+  if (!redis) return { config: null, uuid: null };
+  try {
+    const raw = await redis.get(`user:${encoded}`);
+    if (!raw) return { config: null, uuid: null };
+    const config = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return { config, uuid: encoded };
+  } catch {
+    return { config: null, uuid: null };
   }
-  // Legacy: base64-encoded config embedded in URL
-  return { config: decodeConfig(encoded), uuid: null };
 }
 
 async function saveRefreshedConfig(uuid, newConfig) {
@@ -59,6 +46,15 @@ async function checkRateLimit(uuid) {
   const count = await redis.incr(key);
   if (count === 1) await redis.expire(key, 60);
   return count > 100;
+}
+
+async function mapConcurrent(items, concurrency, fn) {
+  const results = [];
+  for (let i = 0; i < items.length; i += concurrency) {
+    const batch = await Promise.all(items.slice(i, i + concurrency).map(fn));
+    results.push(...batch);
+  }
+  return results;
 }
 
 function setCors(res) {
@@ -300,17 +296,15 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
   const geminiRes = await fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature } }),
+    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature, responseMimeType: 'application/json' } }),
   });
   if (!geminiRes.ok) return res.json({ metas: [] });
 
   const geminiData = await geminiRes.json();
-  const rawText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
   let parsed;
   try {
-    const jsonMatch = rawText.match(/\[[\s\S]*\]/);
-    parsed = JSON.parse(jsonMatch ? jsonMatch[0] : rawText);
+    parsed = JSON.parse(geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '[]');
   } catch {
     return res.json({ metas: [] });
   }
@@ -318,7 +312,7 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
   const traktType = isShow ? 'show' : 'movie';
   const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
   const items = parsed.filter(item => item && typeof item.title === 'string' && item.year);
-  const resolved = await Promise.all(items.map(async item => {
+  const resolved = await mapConcurrent(items, 5, async item => {
     try {
       const r = await fetch(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&limit=5`, { headers });
       if (!r.ok) return null;
@@ -336,7 +330,7 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
       if (top?.ids?.imdb && Math.abs((top.year || 0) - item.year) <= 1) return top.ids.imdb;
       return null;
     } catch { return null; }
-  }));
+  });
   const imdbIds = resolved.filter(id => id && /^tt\d+$/.test(id));
 
   if (redis && cacheKey && imdbIds.length > 0) {
@@ -378,24 +372,22 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
   const geminiRes = await fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7 } }),
+    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7, responseMimeType: 'application/json' } }),
   });
   if (!geminiRes.ok) return res.json({ metas: [] });
 
   const geminiData = await geminiRes.json();
-  const rawText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
   let parsed;
   try {
-    const jsonMatch = rawText.match(/\[[\s\S]*\]/);
-    parsed = JSON.parse(jsonMatch ? jsonMatch[0] : rawText);
+    parsed = JSON.parse(geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '[]');
   } catch {
     return res.json({ metas: [] });
   }
 
   const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
   const items = parsed.filter(item => item && typeof item.title === 'string' && item.year);
-  const resolved = await Promise.all(items.map(async item => {
+  const resolved = await mapConcurrent(items, 5, async item => {
     try {
       const r = await fetch(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&limit=5`, { headers });
       if (!r.ok) return null;
@@ -413,7 +405,7 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
       if (top?.ids?.imdb && Math.abs((top.year || 0) - item.year) <= 1) return top.ids.imdb;
       return null;
     } catch { return null; }
-  }));
+  });
   const imdbIds = resolved.filter(id => id && /^tt\d+$/.test(id));
 
   if (redis && cacheKey && imdbIds.length > 0) {
