@@ -293,8 +293,8 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
     : '';
 
   const prompt = isGems
-    ? `You are a hidden gems ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 20 underrated, obscure, or cult classic ${mediaLabel} matching the user's taste — NOT mainstream blockbusters, franchises, or well-known Oscar winners. Do not recommend anything from the lists above.${customClause}\nReturn ONLY a valid JSON array of 20 objects with title and year, no other text:\n[{"title": "Movie Name", "year": 2023}, ...]`
-    : `You are a ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 20 ${mediaLabel}${genreClause} matching the user's taste. Do not recommend anything from the lists above.${customClause}\nReturn ONLY a valid JSON array of 20 objects with title and year, no other text:\n[{"title": "Movie Name", "year": 2023}, ...]`;
+    ? `You are a hidden gems ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 30 underrated, obscure, or cult classic ${mediaLabel} matching the user's taste — NOT mainstream blockbusters, franchises, or well-known Oscar winners. Do not recommend anything from the lists above.${customClause}\nReturn ONLY a valid JSON array of 30 objects with title and year, no other text:\n[{"title": "Movie Name", "year": 2023}, ...]`
+    : `You are a ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 30 ${mediaLabel}${genreClause} matching the user's taste. Do not recommend anything from the lists above.${customClause}\nReturn ONLY a valid JSON array of 30 objects with title and year, no other text:\n[{"title": "Movie Name", "year": 2023}, ...]`;
 
   // Call Gemini
   const geminiRes = await fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
@@ -319,10 +319,15 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
   const items = parsed.filter(item => item && typeof item.title === 'string' && item.year);
   const resolved = await Promise.all(items.map(async item => {
     try {
-      const r = await fetch(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&years=${item.year}`, { headers });
+      const r = await fetch(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&limit=5`, { headers });
       if (!r.ok) return null;
       const data = await r.json();
-      return data?.[0]?.[traktType]?.ids?.imdb || null;
+      const q = item.title.toLowerCase().trim();
+      const match = data?.find(d => {
+        const t = d[traktType];
+        return t?.ids?.imdb && t.title?.toLowerCase().trim() === q && Math.abs((t.year || 0) - item.year) <= 1;
+      });
+      return match?.[traktType]?.ids?.imdb || null;
     } catch { return null; }
   }));
   const imdbIds = resolved.filter(id => id && /^tt\d+$/.test(id));
@@ -384,10 +389,15 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
   const items = parsed.filter(item => item && typeof item.title === 'string' && item.year);
   const resolved = await Promise.all(items.map(async item => {
     try {
-      const r = await fetch(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&years=${item.year}`, { headers });
+      const r = await fetch(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&limit=5`, { headers });
       if (!r.ok) return null;
       const data = await r.json();
-      return data?.[0]?.[traktType]?.ids?.imdb || null;
+      const q = item.title.toLowerCase().trim();
+      const match = data?.find(d => {
+        const t = d[traktType];
+        return t?.ids?.imdb && t.title?.toLowerCase().trim() === q && Math.abs((t.year || 0) - item.year) <= 1;
+      });
+      return match?.[traktType]?.ids?.imdb || null;
     } catch { return null; }
   }));
   const imdbIds = resolved.filter(id => id && /^tt\d+$/.test(id));
