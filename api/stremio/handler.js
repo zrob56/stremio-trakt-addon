@@ -336,7 +336,7 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
   const searchType = isShow ? 'show' : 'movie';
   const headers = traktHeaders(config.clientId, config.accessToken);
 
-  const prompt = `You are a ${mediaLabel} search engine that understands natural language queries.\n\nThe user searched for: "${query.trim()}"\n\nReturn exactly 20 ${mediaLabel} that best match this search. Interpret the query broadly — include titles, themes, time periods, styles, and subgenres that fit.\n\nReturn ONLY a valid JSON array, no other text:\n[{"title": "Title Here", "year": 2020}, ...]`;
+  const prompt = `You are a ${mediaLabel} search engine that understands natural language queries.\n\nThe user searched for: "${query.trim()}"\n\nReturn exactly 10 ${mediaLabel} that best match this search. Interpret the query broadly — include titles, themes, time periods, styles, and subgenres that fit.\n\nReturn ONLY a valid JSON array, no other text:\n[{"title": "Title Here", "year": 2020}, ...]`;
 
   const geminiRes = await fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
     method: 'POST',
@@ -357,9 +357,9 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
   }
 
   const lookups = await Promise.allSettled(
-    suggestions.slice(0, 20).map(async ({ title, year }) => {
+    suggestions.slice(0, 10).map(async ({ title, year }) => {
       const q = encodeURIComponent(title);
-      const url = `${TRAKT_BASE}/search/${searchType}?query=${q}&years=${year}&limit=1&extended=full`;
+      const url = `${TRAKT_BASE}/search/${searchType}?query=${q}&years=${year}&limit=1`;
       const r = await fetch(url, { headers });
       if (!r.ok) return null;
       const results = await r.json();
@@ -372,9 +372,6 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
         name: item.title,
         poster: rpdbPoster(item.ids.imdb),
         releaseInfo: item.year ? String(item.year) : undefined,
-        description: item.overview || undefined,
-        imdbRating: item.rating ? item.rating.toFixed(1) : undefined,
-        genres: item.genres || undefined,
       };
     })
   );
