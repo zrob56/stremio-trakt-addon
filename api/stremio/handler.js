@@ -56,9 +56,13 @@ async function checkRateLimit(uuid) {
   const redis = getRedis();
   if (!redis) return false;
   const key = `rl:${uuid}:${Math.floor(Date.now() / 60000)}`;
-  const count = await redis.incr(key);
-  if (count === 1) await redis.expire(key, 60);
-  return count > 100;
+  try {
+    const count = await redis.incr(key);
+    if (count === 1) await redis.expire(key, 60);
+    return count > 100;
+  } catch {
+    return true; // block on Redis error (fail-safe)
+  }
 }
 
 function setCors(res) {
@@ -187,9 +191,11 @@ function handleManifest(config, res) {
 
 // ── AI Catalog ────────────────────────────────────────────────
 
-const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+const GEMINI_MODEL = 'gemini-2.5-flash';
+const GEMINI_BASE = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 const RPDB_FREE_KEY = 't0-free-rpdb';
 function rpdbPoster(imdbId) {
+  if (!imdbId) return undefined;
   return `https://api.ratingposterdb.com/${RPDB_FREE_KEY}/imdb/poster-default/${imdbId}.jpg`;
 }
 
@@ -279,6 +285,8 @@ async function handleAICatalog(config, mediaType, genreKey, res, uuid = null) {
   } catch {
     return res.json({ metas: [] });
   }
+  if (!Array.isArray(suggestions)) return res.json({ metas: [] });
+  suggestions = suggestions.filter(s => s?.title && s?.year);
 
   // Look up each suggestion in Trakt in parallel
   const searchType = isShow ? 'show' : 'movie';
@@ -290,7 +298,7 @@ async function handleAICatalog(config, mediaType, genreKey, res, uuid = null) {
       if (!searchRes.ok) return null;
       const results = await searchRes.json();
       if (!results || results.length === 0) return null;
-      const item = results[0][searchType];
+      const item = results?.[0]?.[searchType];
       if (!item || !item.ids?.imdb) return null;
       return {
         id: item.ids.imdb,
@@ -355,6 +363,8 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
   } catch {
     return res.json({ metas: [] });
   }
+  if (!Array.isArray(suggestions)) return res.json({ metas: [] });
+  suggestions = suggestions.filter(s => s?.title && s?.year);
 
   const lookups = await Promise.allSettled(
     suggestions.slice(0, 10).map(async ({ title, year }) => {
@@ -364,7 +374,7 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
       if (!r.ok) return null;
       const results = await r.json();
       if (!results?.length) return null;
-      const item = results[0][searchType];
+      const item = results?.[0]?.[searchType];
       if (!item?.ids?.imdb) return null;
       return {
         id: item.ids.imdb,
@@ -636,6 +646,8 @@ export default async function handler(req, res) {
             return res.json({ metas: [] });
           }
         }
+        // Refresh token itself has expired — signal re-auth needed
+        return res.json({ metas: [], error: 'auth_expired' });
       }
       return res.json({ metas: [] });
     }

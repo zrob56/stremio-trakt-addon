@@ -1,4 +1,13 @@
+import { Redis } from '@upstash/redis';
+
 const TRAKT_BASE = 'https://api.trakt.tv';
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function getRedis() {
+  if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) return null;
+  return Redis.fromEnv();
+}
 
 function decodeConfig(encoded) {
   try {
@@ -10,11 +19,27 @@ function decodeConfig(encoded) {
   }
 }
 
+async function resolveConfig(encoded) {
+  if (!encoded) return null;
+  if (UUID_REGEX.test(encoded)) {
+    const redis = getRedis();
+    if (!redis) return null;
+    try {
+      const raw = await redis.get(`user:${encoded}`);
+      if (!raw) return null;
+      return typeof raw === 'string' ? JSON.parse(raw) : raw;
+    } catch {
+      return null;
+    }
+  }
+  return decodeConfig(encoded);
+}
+
 function traktHeaders(clientId, accessToken) {
   return {
     'Content-Type': 'application/json',
     'trakt-api-version': '2',
-    'trakt-api-key': clientId,
+    'trakt-api-key': clientId || process.env.TRAKT_CLIENT_ID,
     'Authorization': `Bearer ${accessToken}`,
     'User-Agent': 'stremio-trakt-addon/1.0',
   };
@@ -65,8 +90,8 @@ export default async function handler(req, res) {
   const imdbId = url.searchParams.get('id');
   const configEncoded = url.searchParams.get('config');
 
-  const config = decodeConfig(configEncoded);
-  if (!config || !config.accessToken || !config.clientId) {
+  const config = await resolveConfig(configEncoded);
+  if (!config || !config.accessToken || (!config.clientId && !process.env.TRAKT_CLIENT_ID)) {
     return res.status(400).send(htmlPage('Configuration Error', '⚠️', 'Invalid or missing addon configuration.', '#ef4444'));
   }
 
