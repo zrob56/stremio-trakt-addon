@@ -130,11 +130,11 @@ const SHOW_GENRE_KEYS  = ['overall','action','adventure','animation','comedy','c
 const AI_CATALOG_DEFS = [
   ...MOVIE_GENRE_KEYS.map(g => ({
     type: 'movie', id: `ai-movie-${g}`, extra: [{ name: 'skip', isRequired: false }],
-    name: g === 'overall' ? 'AI Movie Picks' : `AI ${GENRE_LABELS[g]} Movies`,
+    name: g === 'overall' ? 'Movie Picks' : `${GENRE_LABELS[g]} Movies`,
   })),
   ...SHOW_GENRE_KEYS.map(g => ({
     type: 'series', id: `ai-show-${g}`, extra: [{ name: 'skip', isRequired: false }],
-    name: g === 'overall' ? 'AI Show Picks' : `AI ${GENRE_LABELS[g]} Shows`,
+    name: g === 'overall' ? 'Show Picks' : `${GENRE_LABELS[g]} Shows`,
   })),
   { type: 'movie',  id: 'ai-movie-gems',    extra: [{ name: 'skip', isRequired: false }],     name: 'Hidden Gem Movies' },
   { type: 'series', id: 'ai-show-gems',     extra: [{ name: 'skip', isRequired: false }],     name: 'Hidden Gem Shows'  },
@@ -230,7 +230,7 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
         const ids = (data.length > 0 && typeof data[0] !== 'string')
           ? data.map(m => m.id).filter(Boolean)
           : data;
-        const page = ids.slice(skip, skip + 20);
+        const page = ids.slice(skip, skip + 40);
         return res.json({ metas: page.map(id => ({ id, type: mediaType, poster: rpdbPoster(id) })) });
       }
     } catch { /* non-fatal */ }
@@ -293,8 +293,8 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
     : '';
 
   const prompt = isGems
-    ? `You are a hidden gems ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 30 underrated, obscure, or cult classic ${mediaLabel} matching the user's taste — NOT mainstream blockbusters, franchises, or well-known Oscar winners. Do not recommend anything from the lists above.${customClause}\nReturn ONLY a valid JSON array of 30 objects with title and year, no other text:\n[{"title": "Movie Name", "year": 2023}, ...]`
-    : `You are a ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 30 ${mediaLabel}${genreClause} matching the user's taste. Do not recommend anything from the lists above.${customClause}\nReturn ONLY a valid JSON array of 30 objects with title and year, no other text:\n[{"title": "Movie Name", "year": 2023}, ...]`;
+    ? `You are a hidden gems ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 40 underrated, obscure, or cult classic ${mediaLabel} matching the user's taste — NOT mainstream blockbusters, franchises, or well-known Oscar winners. Do not recommend anything from the lists above.${customClause}\nReturn ONLY a valid JSON array of 40 objects with title and year, no other text:\n[{"title": "Movie Name", "year": 2023}, ...]`
+    : `You are a ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 40 ${mediaLabel}${genreClause} matching the user's taste. Do not recommend anything from the lists above.${customClause}\nReturn ONLY a valid JSON array of 40 objects with title and year, no other text:\n[{"title": "Movie Name", "year": 2023}, ...]`;
 
   // Call Gemini
   const geminiRes = await fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
@@ -344,7 +344,7 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
   }
 
   res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
-  return res.json({ metas: imdbIds.slice(0, 20).map(id => ({ id, type: mediaType, poster: rpdbPoster(id) })) });
+  return res.json({ metas: imdbIds.slice(0, 40).map(id => ({ id, type: mediaType, poster: rpdbPoster(id) })) });
 }
 
 // ── AI Search ─────────────────────────────────────────────────
