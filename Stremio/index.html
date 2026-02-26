@@ -854,6 +854,7 @@
             const [warmingState, setWarmingState] = useState({ total: 0, done: 0, status: 'idle' });
             const [installUuid, setInstallUuid] = useState(uuid || null);
             const [installing, setInstalling] = useState(!uuid);
+            const [refreshing, setRefreshing] = useState(false);
 
             // Register config in KV to get a stable UUID-based URL (fixes token refresh loop)
             useEffect(() => {
@@ -922,6 +923,24 @@
                     setWarmingState(prev => ({ ...prev, status: 'ready' }));
                 })();
             }, [installing]); // eslint-disable-line react-hooks/exhaustive-deps
+
+            const refreshAICache = useCallback(async () => {
+                if (!installUuid) return;
+                setRefreshing(true);
+                try {
+                    const r = await fetch('/api/stremio/refresh', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ uuid: installUuid }),
+                    });
+                    setToast(r.ok
+                        ? { message: 'AI cache cleared — reload Stremio to get fresh picks', type: 'success' }
+                        : { message: 'Failed to clear cache', type: 'error' });
+                } catch {
+                    setToast({ message: 'Failed to clear cache', type: 'error' });
+                }
+                setRefreshing(false);
+            }, [installUuid]);
 
             return (
                 <div className="animate-fade-in space-y-6">
@@ -1008,6 +1027,24 @@
                                 <p className="text-sm text-emerald-300 font-medium">AI catalogs ready</p>
                                 <p className="text-xs text-neutral-500">All {warmingState.total} catalog{warmingState.total !== 1 ? 's' : ''} will load instantly when you open Stremio</p>
                             </div>
+                        </div>
+                    )}
+
+                    {installUuid && (
+                        <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 flex items-center justify-between gap-4">
+                            <div>
+                                <p className="text-xs font-medium text-neutral-300">Refresh AI Picks</p>
+                                <p className="text-xs text-neutral-600 mt-0.5">Clear cached recommendations so Stremio generates fresh picks on next load.</p>
+                            </div>
+                            <button
+                                onClick={refreshAICache}
+                                disabled={refreshing}
+                                className="flex-shrink-0 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 text-white rounded-lg px-3 py-2 text-xs transition flex items-center gap-1.5"
+                            >
+                                {refreshing
+                                    ? <><div className="w-3 h-3 border border-white/30 border-t-white rounded-full spinner" /> Clearing…</>
+                                    : <><Icon name="RefreshCw" size={12} /> Refresh</>}
+                            </button>
                         </div>
                     )}
 
