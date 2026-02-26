@@ -563,12 +563,13 @@ async function handleCatalog(config, type, id, extra, res, uuid = null) {
     }
     default: {
       if (id.startsWith('ai-') && config.geminiKey) {
-        if (id === 'ai-search-movie')  return handleAISearch(config, 'movie',  params.search, res, uuid);
-        if (id === 'ai-search-series') return handleAISearch(config, 'series', params.search, res, uuid);
+        const cacheId = config.traktUsername || uuid;
+        if (id === 'ai-search-movie')  return handleAISearch(config, 'movie',  params.search, res, cacheId);
+        if (id === 'ai-search-series') return handleAISearch(config, 'series', params.search, res, cacheId);
         const parts = id.split('-');
         const aiMediaType = parts[1] === 'show' ? 'series' : parts[1];
         const genreKey = parts[2] || 'overall';
-        return await handleAICatalog(config, aiMediaType, genreKey, res, uuid);
+        return await handleAICatalog(config, aiMediaType, genreKey, res, cacheId);
       }
       return res.json({ metas: [] });
     }

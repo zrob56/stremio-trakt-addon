@@ -53,6 +53,22 @@ export default async function handler(req, res) {
     ...(excludedFromFeed?.length ? { excludedFromFeed } : {}),
   };
 
+  // Fetch Trakt username to use as shared cache namespace across installs
+  try {
+    const meRes = await fetch('https://api.trakt.tv/users/me', {
+      headers: {
+        'Content-Type': 'application/json',
+        'trakt-api-version': '2',
+        'trakt-api-key': clientId || process.env.TRAKT_CLIENT_ID,
+        'Authorization': `Bearer ${accessToken}`,
+      },
+    });
+    if (meRes.ok) {
+      const me = await meRes.json();
+      if (me?.username) config.traktUsername = me.username;
+    }
+  } catch { /* non-fatal */ }
+
   // Re-use existing UUID (update) or generate a new one
   const uuid = existingUuid || crypto.randomUUID();
 

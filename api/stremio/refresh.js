@@ -35,11 +35,20 @@ export default async function handler(req, res) {
     return res.status(503).json({ error: 'Redis not configured' });
   }
 
+  let cacheId = uuid;
+  try {
+    const raw = await redis.get(`user:${uuid}`);
+    if (raw) {
+      const cfg = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (cfg?.traktUsername) cacheId = cfg.traktUsername;
+    }
+  } catch { /* fall back to uuid */ }
+
   const keys = [
-    ...MOVIE_GENRE_KEYS.map(g => `ai:${uuid}:ai-movie-${g}`),
-    ...SHOW_GENRE_KEYS.map(g => `ai:${uuid}:ai-show-${g}`),
-    `ai:${uuid}:ai-movie-gems`,
-    `ai:${uuid}:ai-show-gems`,
+    ...MOVIE_GENRE_KEYS.map(g => `ai:${cacheId}:ai-movie-${g}`),
+    ...SHOW_GENRE_KEYS.map(g => `ai:${cacheId}:ai-show-${g}`),
+    `ai:${cacheId}:ai-movie-gems`,
+    `ai:${cacheId}:ai-show-gems`,
   ];
 
   try {
