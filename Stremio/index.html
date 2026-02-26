@@ -858,7 +858,18 @@
 
             // Register config in KV to get a stable UUID-based URL (fixes token refresh loop)
             useEffect(() => {
-                if (uuid) { setInstallUuid(uuid); setInstalling(false); return; }
+                const clearCache = (id) => fetch('/api/stremio/refresh', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ uuid: id }),
+                }).catch(() => {});
+
+                if (uuid) {
+                    setInstallUuid(uuid);
+                    setInstalling(false);
+                    clearCache(uuid);
+                    return;
+                }
                 (async () => {
                     try {
                         const res = await fetch('/api/stremio/install', {
@@ -877,6 +888,7 @@
                             const { uuid: newUuid } = await res.json();
                             setInstallUuid(newUuid);
                             onUuidSet?.(newUuid);
+                            clearCache(newUuid);
                         }
                     } catch { /* non-fatal — falls back to base64 URL */ }
                     setInstalling(false);
