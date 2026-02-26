@@ -293,8 +293,8 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
     : '';
 
   const prompt = isGems
-    ? `You are a hidden gems ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 20 underrated, obscure, or cult classic ${mediaLabel} matching the user's taste — NOT mainstream blockbusters, franchises, or well-known Oscar winners. Do not recommend anything from the lists above.${customClause}\nReturn ONLY a valid JSON array of 20 IMDb IDs, no other text:\n["tt1234567", "tt2345678", ...]`
-    : `You are a ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 20 ${mediaLabel}${genreClause} matching the user's taste. Do not recommend anything from the lists above.${customClause}\nReturn ONLY a valid JSON array of 20 IMDb IDs, no other text:\n["tt1234567", "tt2345678", ...]`;
+    ? `You are a hidden gems ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 20 underrated, obscure, or cult classic ${mediaLabel} matching the user's taste — NOT mainstream blockbusters, franchises, or well-known Oscar winners. Do not recommend anything from the lists above.${customClause}\nReturn ONLY a valid JSON array of 20 objects with title and year, no other text:\n[{"title": "Movie Name", "year": 2023}, ...]`
+    : `You are a ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 20 ${mediaLabel}${genreClause} matching the user's taste. Do not recommend anything from the lists above.${customClause}\nReturn ONLY a valid JSON array of 20 objects with title and year, no other text:\n[{"title": "Movie Name", "year": 2023}, ...]`;
 
   // Call Gemini
   const geminiRes = await fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
@@ -315,7 +315,17 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
     return res.json({ metas: [] });
   }
 
-  const imdbIds = parsed.filter(id => typeof id === 'string' && /^tt\d+$/.test(id));
+  const traktType = isShow ? 'show' : 'movie';
+  const items = parsed.filter(item => item && typeof item.title === 'string' && item.year);
+  const resolved = await Promise.all(items.map(async item => {
+    try {
+      const r = await fetch(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&years=${item.year}`, { headers });
+      if (!r.ok) return null;
+      const data = await r.json();
+      return data?.[0]?.[traktType]?.ids?.imdb || null;
+    } catch { return null; }
+  }));
+  const imdbIds = resolved.filter(id => id && /^tt\d+$/.test(id));
 
   if (redis && cacheKey && imdbIds.length > 0) {
     try { await redis.set(cacheKey, JSON.stringify(imdbIds), { ex: 172800 }); } catch { /* non-fatal */ }
@@ -348,8 +358,10 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
 
   const isShow = mediaType === 'series';
   const mediaLabel = isShow ? 'TV shows' : 'movies';
+  const traktType = isShow ? 'show' : 'movie';
+  const headers = traktHeaders(config.clientId, config.accessToken);
 
-  const prompt = `You are a ${mediaLabel} search engine that understands natural language queries.\n\nThe user searched for: "${query.trim()}"\n\nReturn exactly 10 ${mediaLabel} that best match this search. Interpret the query broadly — include titles, themes, time periods, styles, and subgenres that fit.\n\nReturn ONLY a valid JSON array of 10 IMDb IDs, no other text:\n["tt1234567", "tt2345678", ...]`;
+  const prompt = `You are a ${mediaLabel} search engine that understands natural language queries.\n\nThe user searched for: "${query.trim()}"\n\nReturn exactly 10 ${mediaLabel} that best match this search. Interpret the query broadly — include titles, themes, time periods, styles, and subgenres that fit.\n\nReturn ONLY a valid JSON array of 10 objects with title and year, no other text:\n[{"title": "Movie Name", "year": 2023}, ...]`;
 
   const geminiRes = await fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
     method: 'POST',
@@ -369,7 +381,16 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
     return res.json({ metas: [] });
   }
 
-  const imdbIds = parsed.filter(id => typeof id === 'string' && /^tt\d+$/.test(id));
+  const items = parsed.filter(item => item && typeof item.title === 'string' && item.year);
+  const resolved = await Promise.all(items.map(async item => {
+    try {
+      const r = await fetch(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&years=${item.year}`, { headers });
+      if (!r.ok) return null;
+      const data = await r.json();
+      return data?.[0]?.[traktType]?.ids?.imdb || null;
+    } catch { return null; }
+  }));
+  const imdbIds = resolved.filter(id => id && /^tt\d+$/.test(id));
 
   if (redis && cacheKey && imdbIds.length > 0) {
     try { await redis.set(cacheKey, JSON.stringify(imdbIds), { ex: 3600 }); } catch { /* non-fatal */ }
