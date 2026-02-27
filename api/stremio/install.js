@@ -7,10 +7,10 @@ function setCors(res) {
 }
 
 function getRedis() {
-  if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
+  if (!process.env.KV_REST_API_URL || !process.env.KV_REST_API_TOKEN) {
     throw new Error('Upstash Redis not configured');
   }
-  return Redis.fromEnv();
+  return new Redis({ url: process.env.KV_REST_API_URL, token: process.env.KV_REST_API_TOKEN });
 }
 
 export default async function handler(req, res) {
@@ -39,7 +39,7 @@ export default async function handler(req, res) {
   try {
     redis = getRedis();
   } catch {
-    return res.status(503).json({ error: 'Storage not configured. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN env vars.' });
+    return res.status(503).json({ error: 'Storage not configured. Set KV_REST_API_URL and KV_REST_API_TOKEN env vars.' });
   }
 
   const config = {

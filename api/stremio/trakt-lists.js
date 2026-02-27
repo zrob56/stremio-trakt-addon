@@ -11,13 +11,13 @@ export default async function handler(req, res) {
   const { uuid } = req.query;
   if (!uuid) return res.status(400).json({ error: 'uuid required' });
 
-  if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
+  if (!process.env.KV_REST_API_URL || !process.env.KV_REST_API_TOKEN) {
     return res.status(500).json({ error: 'redis not configured' });
   }
 
   let config;
   try {
-    const redis = Redis.fromEnv();
+    const redis = new Redis({ url: process.env.KV_REST_API_URL, token: process.env.KV_REST_API_TOKEN });
     const raw = await redis.get(`user:${uuid}`);
     if (!raw) return res.status(404).json({ error: 'not found' });
     config = typeof raw === 'string' ? JSON.parse(raw) : raw;
