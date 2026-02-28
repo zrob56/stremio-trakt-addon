@@ -1,4 +1,10 @@
 {
+  "crons": [
+    {
+      "path": "/api/stremio/pregenerate",
+      "schedule": "0 3 * * *"
+    }
+  ],
   "redirects": [
     { "source": "/", "destination": "/Stremio/index.html", "permanent": false }
   ],

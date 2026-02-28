@@ -857,7 +857,6 @@
         function StepInstall({ clientId, clientSecret, geminiKey, tokens, enabledCatalogs, setEnabledCatalogs, onBack, onManage, uuid, onUuidSet, traktLists = [], traktListsLoading = false }) {
             const [copied, setCopied] = useState(false);
             const [toast, setToast] = useState(null);
-            const [warmingState, setWarmingState] = useState({ total: 0, done: 0, status: 'idle' });
             const [installUuid, setInstallUuid] = useState(uuid || null);
             const [installing, setInstalling] = useState(!uuid);
             const [refreshing, setRefreshing] = useState(false);
@@ -916,33 +915,6 @@
                 setToast({ message: 'URL copied to clipboard', type: 'success' });
                 setTimeout(() => setCopied(false), 2000);
             }, [manifestUrl]);
-
-            // Pre-warm Vercel edge cache for all AI catalogs on mount
-            // Pre-warm Vercel edge cache — wait for UUID so we warm the right URL
-            useEffect(() => {
-                if (installing) return;
-                const warmConfig = installUuid || configEncoded;
-                const aiCatalogs = enabledCatalogs.filter(id => id.startsWith('ai-'));
-                if (!aiCatalogs.length || !geminiKey) {
-                    setWarmingState({ total: 0, done: 0, status: 'skipped' });
-                    return;
-                }
-                setWarmingState({ total: aiCatalogs.length, done: 0, status: 'warming' });
-
-                const warmCatalog = async (catalogId) => {
-                    const type = catalogId.startsWith('ai-movie') ? 'movie' : 'series';
-                    const url = `${baseUrl}/stremio/${warmConfig}/catalog/${type}/${catalogId}.json`;
-                    try { await fetch(url); } catch {}
-                    setWarmingState(prev => ({ ...prev, done: prev.done + 1 }));
-                };
-
-                (async () => {
-                    for (let i = 0; i < aiCatalogs.length; i += 3) {
-                        await Promise.all(aiCatalogs.slice(i, i + 3).map(warmCatalog));
-                    }
-                    setWarmingState(prev => ({ ...prev, status: 'ready' }));
-                })();
-            }, [installing]); // eslint-disable-line react-hooks/exhaustive-deps
 
             const refreshAICache = useCallback(async () => {
                 if (!installUuid) return;
@@ -1021,34 +993,6 @@
                             </ol>
                         </div>
                     </div>
-
-                    {/* Cache warming status */}
-                    {warmingState.status === 'warming' && (
-                        <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4">
-                            <div className="flex items-center gap-3">
-                                <div className="w-4 h-4 border-2 border-trakt-500/30 border-t-trakt-500 rounded-full spinner flex-shrink-0" />
-                                <div className="flex-1">
-                                    <p className="text-sm text-neutral-300 font-medium">Preparing AI catalogs…</p>
-                                    <p className="text-xs text-neutral-500 mt-0.5">{warmingState.done} of {warmingState.total} ready — they'll load instantly in Stremio</p>
-                                </div>
-                            </div>
-                            <div className="mt-3 h-1 bg-neutral-800 rounded-full overflow-hidden">
-                                <div
-                                    className="h-full bg-trakt-500 rounded-full transition-all duration-500"
-                                    style={{ width: `${warmingState.total > 0 ? (warmingState.done / warmingState.total) * 100 : 0}%` }}
-                                />
-                            </div>
-                        </div>
-                    )}
-                    {warmingState.status === 'ready' && (
-                        <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4 flex items-center gap-3">
-                            <Icon name="CheckCircle" size={18} className="text-emerald-400 flex-shrink-0" />
-                            <div>
-                                <p className="text-sm text-emerald-300 font-medium">AI catalogs ready</p>
-                                <p className="text-xs text-neutral-500">All {warmingState.total} catalog{warmingState.total !== 1 ? 's' : ''} will load instantly when you open Stremio</p>
-                            </div>
-                        </div>
-                    )}
 
                     {installUuid && (
                         <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 flex items-center justify-between gap-4">
@@ -1354,6 +1298,8 @@
             const [copied, setCopied] = useState(false);
             const [toast, setToast] = useState(null);
             const [geminiKey, setGeminiKey] = useState(initialGeminiKey || '');
+            const [prewarmProgress, setPrewarmProgress] = useState(null); // null | { done, total }
+            const prewarmStarted = useRef(false);
             const [geminiSaved, setGeminiSaved] = useState(false);
             const [instrSaved, setInstrSaved] = useState(false);
             const [customInstructions, setCustomInstructions] = useState(initialCustomInstructions || '');
@@ -1438,6 +1384,34 @@
                     } catch { /* non-fatal */ }
                 })();
             }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+            // Sequential AI catalog pre-warm — respects Gemini 5 RPM free tier
+            const startPrewarm = useCallback(async (prewarmUuid, catalogIds) => {
+                for (let i = 0; i < catalogIds.length; i++) {
+                    const parts = catalogIds[i].split('-');
+                    const type  = parts[1]; // 'movie' | 'show'
+                    const genre = parts.slice(2).join('-');
+                    try {
+                        await fetch(`/api/stremio/prewarm?uuid=${prewarmUuid}&type=${type}&genre=${genre}`);
+                    } catch { /* non-fatal */ }
+                    setPrewarmProgress({ done: i + 1, total: catalogIds.length });
+                    if (i < catalogIds.length - 1) {
+                        await new Promise(r => setTimeout(r, 12500));
+                    }
+                }
+                setTimeout(() => setPrewarmProgress(null), 3000);
+            }, []);
+
+            // Trigger once when uuid is first available (fresh install or returning user first visit)
+            useEffect(() => {
+                if (!uuid || prewarmStarted.current) return;
+                prewarmStarted.current = true;
+                const aiCatalogs = enabledCatalogs.filter(id =>
+                    (id.startsWith('ai-movie-') || id.startsWith('ai-show-')) && !id.includes('search')
+                );
+                if (aiCatalogs.length === 0 || !geminiKey) return;
+                startPrewarm(uuid, aiCatalogs);
+            }, [uuid]); // eslint-disable-line react-hooks/exhaustive-deps
 
             const saveGeminiKey = useCallback(() => {
                 try {
@@ -1574,6 +1548,34 @@
                             </button>
                         </div>
                     </div>
+
+                    {/* AI catalog pre-warm progress */}
+                    {prewarmProgress && prewarmProgress.done < prewarmProgress.total && (
+                        <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4">
+                            <div className="flex items-center gap-3">
+                                <div className="w-4 h-4 border-2 border-trakt-500/30 border-t-trakt-500 rounded-full spinner flex-shrink-0" />
+                                <div className="flex-1">
+                                    <p className="text-sm text-neutral-300 font-medium">Setting up AI catalogs...</p>
+                                    <p className="text-xs text-neutral-500 mt-0.5">({prewarmProgress.done} / {prewarmProgress.total}) — they'll load instantly in Stremio</p>
+                                </div>
+                            </div>
+                            <div className="mt-3 h-1 bg-neutral-800 rounded-full overflow-hidden">
+                                <div
+                                    className="h-full bg-trakt-500 rounded-full transition-all duration-500"
+                                    style={{ width: `${(prewarmProgress.done / prewarmProgress.total) * 100}%` }}
+                                />
+                            </div>
+                        </div>
+                    )}
+                    {prewarmProgress && prewarmProgress.done === prewarmProgress.total && (
+                        <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4 flex items-center gap-3">
+                            <Icon name="CheckCircle" size={18} className="text-emerald-400 flex-shrink-0" />
+                            <div>
+                                <p className="text-sm text-emerald-300 font-medium">AI catalogs ready</p>
+                                <p className="text-xs text-neutral-500">All {prewarmProgress.total} catalog{prewarmProgress.total !== 1 ? 's' : ''} cached and ready to load in Stremio</p>
+                            </div>
+                        </div>
+                    )}
 
                     {/* Gemini Key */}
                     <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 space-y-2">
