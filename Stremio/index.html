@@ -1395,9 +1395,7 @@
                         await fetch(`/api/stremio/prewarm?uuid=${prewarmUuid}&type=${type}&genre=${genre}`);
                     } catch { /* non-fatal */ }
                     setPrewarmProgress({ done: i + 1, total: catalogIds.length });
-                    if (i < catalogIds.length - 1) {
-                        await new Promise(r => setTimeout(r, 12500));
-                    }
+                    await new Promise(r => setTimeout(r, 15000));
                 }
                 setTimeout(() => setPrewarmProgress(null), 3000);
             }, []);

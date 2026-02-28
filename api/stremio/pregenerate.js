@@ -5,7 +5,7 @@ const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gem
 
 const AI_CATALOG_TTL = 2592000; // 30 days
 const BUDGET_MS = 52000;       // stop generating after 52s (8s margin before 60s timeout)
-const SLEEP_MS = 12500;        // 12.5s gap between Gemini calls → safe under 5 RPM
+const SLEEP_MS = 15000;        // 15s gap between Gemini calls → 4 RPM, safe under 5 RPM
 
 const GENRE_LABELS = {
   overall: null,
@@ -232,9 +232,8 @@ export default async function handler(req, res) {
         console.error(`pregenerate error ${uuid}/${catalogId}:`, err.message);
       }
 
-      // Respect rate limit — sleep between calls (not after the last one overall)
-      const isLast = i === aiCatalogs.length - 1;
-      if (!isLast) await sleep(SLEEP_MS);
+      // Respect rate limit — always sleep to ensure consistent 4 RPM across user boundaries
+      await sleep(SLEEP_MS);
 
       // Check time budget
       if (Date.now() - startTime > BUDGET_MS) {
