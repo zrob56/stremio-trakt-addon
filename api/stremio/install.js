@@ -4,7 +4,7 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 function setCors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
@@ -40,6 +40,17 @@ export default async function handler(req, res) {
       enabledCatalogs: cfg.enabledCatalogs || [],
       traktLists: cfg.traktLists || [],
     });
+  }
+
+  if (req.method === 'DELETE') {
+    const uuid = new URL(req.url, `http://${req.headers.host}`).searchParams.get('uuid');
+    if (!uuid || !UUID_REGEX.test(uuid)) return res.status(400).json({ error: 'Invalid uuid' });
+    let redis;
+    try { redis = getRedis(); } catch {
+      return res.status(503).json({ error: 'Storage not configured' });
+    }
+    await redis.del(`user:${uuid}`);
+    return res.status(200).json({ deleted: true });
   }
 
   if (req.method !== 'POST') {

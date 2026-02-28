@@ -1792,6 +1792,9 @@
             }, []);
 
             const handleReauth = useCallback(() => {
+                if (uuid) {
+                    fetch(`/api/stremio/install?uuid=${uuid}`, { method: 'DELETE' }).catch(() => {});
+                }
                 try { localStorage.removeItem('trakt_config'); localStorage.removeItem('trakt_uuid'); } catch {}
                 setTokens(null);
                 setClientId('');
