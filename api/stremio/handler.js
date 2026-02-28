@@ -24,6 +24,7 @@ async function resolveConfig(encoded) {
     const raw = await redis.get(`user:${encoded}`);
     if (!raw) return { config: null, uuid: null };
     const config = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    redis.expire(`user:${encoded}`, 3024000).catch(() => {}); // sliding 35-day TTL
     return { config, uuid: encoded };
   } catch {
     return { config: null, uuid: null };
@@ -35,7 +36,7 @@ async function saveRefreshedConfig(uuid, newConfig) {
   try {
     const redis = getRedis();
     if (!redis) return;
-    await redis.set(`user:${uuid}`, JSON.stringify(newConfig), { ex: 63072000 });
+    await redis.set(`user:${uuid}`, JSON.stringify(newConfig), { ex: 3024000 });
   } catch { /* non-fatal — request already succeeded */ }
 }
 
