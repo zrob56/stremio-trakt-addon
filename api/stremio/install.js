@@ -1,8 +1,10 @@
 import { Redis } from '@upstash/redis';
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function setCors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
@@ -19,6 +21,26 @@ export default async function handler(req, res) {
     return res.status(204).end();
   }
   setCors(res);
+
+  if (req.method === 'GET') {
+    const uuid = new URL(req.url, `http://${req.headers.host}`).searchParams.get('uuid');
+    if (!uuid || !UUID_REGEX.test(uuid)) {
+      return res.status(400).json({ error: 'Invalid uuid' });
+    }
+    let redis;
+    try { redis = getRedis(); } catch {
+      return res.status(503).json({ error: 'Storage not configured' });
+    }
+    const raw = await redis.get(`user:${uuid}`);
+    if (!raw) return res.status(404).json({ error: 'Not found' });
+    const cfg = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return res.json({
+      excludedFromFeed: cfg.excludedFromFeed || [],
+      customInstructions: cfg.customInstructions || '',
+      enabledCatalogs: cfg.enabledCatalogs || [],
+      traktLists: cfg.traktLists || [],
+    });
+  }
 
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });

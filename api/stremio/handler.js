@@ -134,8 +134,8 @@ const AI_CATALOG_DEFS = [
   })),
   { type: 'movie',  id: 'ai-movie-gems',    extra: [{ name: 'skip', isRequired: false }],     name: 'Hidden Gem Movies' },
   { type: 'series', id: 'ai-show-gems',     extra: [{ name: 'skip', isRequired: false }],     name: 'Hidden Gem Shows'  },
-  { type: 'movie',  id: 'ai-search-movie',  extra: [{ name: 'search', isRequired: false }],   name: 'AI Movie Search'   },
-  { type: 'series', id: 'ai-search-series', extra: [{ name: 'search', isRequired: false }],   name: 'AI Show Search'    },
+  { type: 'movie',  id: 'ai-search-movie',  extra: [{ name: 'search', isRequired: true }],    name: 'AI Movie Search'   },
+  { type: 'series', id: 'ai-search-series', extra: [{ name: 'search', isRequired: true }],    name: 'AI Show Search'    },
 ];
 
 const ALL_CATALOG_DEFS = [

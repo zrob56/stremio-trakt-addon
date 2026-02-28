@@ -556,7 +556,7 @@
                                 onClick={onNext}
                                 className="bg-trakt-600 hover:bg-trakt-700 text-white font-medium rounded-lg px-4 py-2 text-sm transition flex items-center gap-2 flex-shrink-0"
                             >
-                                Install in Stremio <Icon name="ArrowRight" size={14} />
+                                Continue <Icon name="ArrowRight" size={14} />
                             </button>
                         )}
                     </div>
@@ -1096,6 +1096,7 @@
             const [loading, setLoading] = useState(false);
             const [toast, setToast] = useState(null);
             const [actionLoading, setActionLoading] = useState({});
+            const [pendingRating, setPendingRating] = useState({});
 
             const traktHeaders = {
                 'Content-Type': 'application/json',
@@ -1213,14 +1214,30 @@
                                         Mark as Watched
                                     </button>
                                     <select
-                                        defaultValue=""
+                                        value={pendingRating[rateKey] ?? ''}
                                         disabled={actionLoading[rateKey]}
-                                        onChange={e => { if (e.target.value) rateItem(item, parseInt(e.target.value)); e.target.value = ''; }}
+                                        onChange={e => {
+                                            const val = e.target.value;
+                                            if (!val) return;
+                                            setPendingRating(prev => prev[rateKey] === val ? (({ [rateKey]: _, ...rest }) => rest)(prev) : { ...prev, [rateKey]: val });
+                                        }}
                                         className="bg-neutral-800 border border-neutral-700 text-neutral-300 rounded-lg px-2 py-2 text-xs focus:outline-none focus:border-trakt-500 transition"
                                     >
                                         <option value="" disabled>⭐ Rate</option>
                                         {[10,9,8,7,6,5,4,3,2,1].map(n => <option key={n} value={n}>{n}/10</option>)}
                                     </select>
+                                    {pendingRating[rateKey] && (
+                                        <button
+                                            onClick={() => {
+                                                rateItem(item, parseInt(pendingRating[rateKey]));
+                                                setPendingRating(prev => (({ [rateKey]: _, ...rest }) => rest)(prev));
+                                            }}
+                                            className="bg-trakt-600 hover:bg-trakt-700 text-white rounded-lg px-2 py-2 text-xs transition flex items-center gap-1"
+                                            title="Confirm rating"
+                                        >
+                                            <Icon name="Check" size={12} /> Confirm
+                                        </button>
+                                    )}
                                 </div>
                             </div>
                         );
@@ -1338,6 +1355,7 @@
             const [toast, setToast] = useState(null);
             const [geminiKey, setGeminiKey] = useState(initialGeminiKey || '');
             const [geminiSaved, setGeminiSaved] = useState(false);
+            const [instrSaved, setInstrSaved] = useState(false);
             const [customInstructions, setCustomInstructions] = useState(initialCustomInstructions || '');
             const [feedingData, setFeedingData] = useState({ movies: { rated: [], watched: [], watchlist: [] }, shows: { rated: [], watched: [], watchlist: [] } });
             const [feedingOpen, setFeedingOpen] = useState(false);
@@ -1372,6 +1390,29 @@
                     });
                 } catch { /* non-fatal */ }
             }, [uuid, clientId, clientSecret, tokens, geminiKey, enabledCatalogs, customInstructions, excludedFromFeed]);
+
+            // Sync excludedFromFeed from KV on mount (so a fresh browser gets the server state)
+            useEffect(() => {
+                if (!uuid) return;
+                (async () => {
+                    try {
+                        const r = await fetch(`/api/stremio/install?uuid=${uuid}`);
+                        if (!r.ok) return;
+                        const data = await r.json();
+                        if (data.excludedFromFeed?.length) {
+                            setExcludedFromFeed(prev => {
+                                const merged = [...new Set([...prev, ...data.excludedFromFeed])];
+                                try {
+                                    const saved = JSON.parse(localStorage.getItem('trakt_config') || '{}');
+                                    saved.excludedFromFeed = merged;
+                                    localStorage.setItem('trakt_config', JSON.stringify(saved));
+                                } catch {}
+                                return merged;
+                            });
+                        }
+                    } catch { /* non-fatal */ }
+                })();
+            }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
             // Generate UUID if we don't have one yet (e.g. returning user on old base64 URL)
             useEffect(() => {
@@ -1416,6 +1457,8 @@
                     saved.customInstructions = customInstructions.trim();
                     localStorage.setItem('trakt_config', JSON.stringify(saved));
                     pushToKV({ customInstructions: customInstructions.trim() || undefined });
+                    setInstrSaved(true);
+                    setTimeout(() => setInstrSaved(false), 2000);
                 } catch {}
             }, [customInstructions, pushToKV]);
 
@@ -1598,7 +1641,10 @@
                                     rows={2}
                                     className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-trakt-500 resize-none transition"
                                 />
-                                <p className="text-xs text-neutral-600">Saved on blur. Copy the updated manifest URL and reinstall to apply.</p>
+                                {instrSaved
+                                    ? <p className="text-xs text-emerald-500">Saved ✓</p>
+                                    : <p className="text-xs text-neutral-600">Saved on blur. Copy the updated manifest URL and reinstall to apply.</p>
+                                }
                             </div>
 
                             {/* What's feeding the AI */}

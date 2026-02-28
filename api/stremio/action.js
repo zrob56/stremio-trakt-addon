@@ -4,6 +4,10 @@ const TRAKT_BASE = 'https://api.trakt.tv';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+class TraktAuthError extends Error {
+  constructor(msg) { super(msg); this.name = 'TraktAuthError'; }
+}
+
 function getRedis() {
   if (!process.env.KV_REST_API_URL || !process.env.KV_REST_API_TOKEN) return null;
   return new Redis({ url: process.env.KV_REST_API_URL, token: process.env.KV_REST_API_TOKEN });
@@ -17,6 +21,30 @@ function traktHeaders(clientId, accessToken) {
     'Authorization': `Bearer ${accessToken}`,
     'User-Agent': 'stremio-trakt-addon/1.0',
   };
+}
+
+async function refreshToken(config) {
+  const response = await fetch(`${TRAKT_BASE}/oauth/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      refresh_token: config.refreshToken,
+      client_id: config.clientId || process.env.TRAKT_CLIENT_ID,
+      client_secret: config.clientSecret || process.env.TRAKT_CLIENT_SECRET || '',
+      redirect_uri: 'urn:ietf:wg:oauth:2.0:oob',
+      grant_type: 'refresh_token',
+    }),
+  });
+  if (!response.ok) return null;
+  const tokens = await response.json();
+  return { ...config, accessToken: tokens.access_token, refreshToken: tokens.refresh_token };
+}
+
+async function saveRefreshedConfig(uuid, newConfig, redis) {
+  if (!uuid || !redis) return;
+  try {
+    await redis.set(`user:${uuid}`, JSON.stringify(newConfig), { ex: 63072000 });
+  } catch { /* non-fatal */ }
 }
 
 function htmlPage(title, emoji, message, color = '#10b981') {
@@ -48,10 +76,58 @@ function htmlPage(title, emoji, message, color = '#10b981') {
 async function lookupTraktId(imdbId, type, headers) {
   const searchType = type === 'show' ? 'show' : 'movie';
   const res = await fetch(`${TRAKT_BASE}/search/imdb/${imdbId}?type=${searchType}`, { headers });
+  if (res.status === 401) throw new TraktAuthError('Token expired');
   if (!res.ok) return null;
   const data = await res.json();
   if (!data || data.length === 0) return null;
   return data[0][searchType]?.ids?.trakt || null;
+}
+
+async function doAction(config, imdbId, type, action, res) {
+  const headers = traktHeaders(config.clientId, config.accessToken);
+
+  const traktId = await lookupTraktId(imdbId, type, headers);
+  if (!traktId) {
+    return res.status(404).send(htmlPage('Not Found', '🔍', 'Could not find this title on Trakt.', '#f59e0b'));
+  }
+
+  if (action === 'watchlist') {
+    const body = type === 'show'
+      ? { shows: [{ ids: { trakt: traktId, imdb: imdbId } }] }
+      : { movies: [{ ids: { trakt: traktId, imdb: imdbId } }] };
+    const r = await fetch(`${TRAKT_BASE}/sync/watchlist`, {
+      method: 'POST', headers, body: JSON.stringify(body),
+    });
+    if (r.status === 401) throw new TraktAuthError('Token expired');
+    if (r.ok) {
+      return res.send(htmlPage('Added to Watchlist', '👍', 'This title has been added to your Trakt watchlist.'));
+    }
+    return res.status(500).send(htmlPage('Failed', '❌', 'Could not add to watchlist. Try again.', '#ef4444'));
+  }
+
+  if (action === 'dismiss') {
+    const endpoint = type === 'show'
+      ? `${TRAKT_BASE}/recommendations/shows/${traktId}`
+      : `${TRAKT_BASE}/recommendations/movies/${traktId}`;
+    const r = await fetch(endpoint, { method: 'DELETE', headers });
+    if (r.status === 401) throw new TraktAuthError('Token expired');
+    if (r.ok || r.status === 204) {
+      return res.send(htmlPage('Dismissed', '👎', 'This title has been removed from your recommendations.', '#6366f1'));
+    }
+    return res.status(500).send(htmlPage('Failed', '❌', 'Could not dismiss. Try again.', '#ef4444'));
+  }
+
+  if (action === 'unwatchlist') {
+    const body = type === 'show'
+      ? { shows: [{ ids: { trakt: traktId, imdb: imdbId } }] }
+      : { movies: [{ ids: { trakt: traktId, imdb: imdbId } }] };
+    const r = await fetch(`${TRAKT_BASE}/sync/watchlist/remove`, { method: 'POST', headers, body: JSON.stringify(body) });
+    if (r.status === 401) throw new TraktAuthError('Token expired');
+    if (r.ok) return res.send(htmlPage('Removed from Watchlist', '🗑️', 'Removed from your Trakt watchlist.', '#6366f1'));
+    return res.status(500).send(htmlPage('Failed', '❌', 'Could not remove. Try again.', '#ef4444'));
+  }
+
+  return res.status(400).send(htmlPage('Unknown Action', '⚠️', 'Invalid action requested.', '#f59e0b'));
 }
 
 export default async function handler(req, res) {
@@ -87,49 +163,21 @@ export default async function handler(req, res) {
     return res.status(400).send(htmlPage('Missing ID', '⚠️', 'No title ID provided.', '#f59e0b'));
   }
 
-  const headers = traktHeaders(config.clientId, config.accessToken);
-
   try {
-    const traktId = await lookupTraktId(imdbId, type, headers);
-    if (!traktId) {
-      return res.status(404).send(htmlPage('Not Found', '🔍', 'Could not find this title on Trakt.', '#f59e0b'));
-    }
-
-    if (action === 'watchlist') {
-      const body = type === 'show'
-        ? { shows: [{ ids: { trakt: traktId, imdb: imdbId } }] }
-        : { movies: [{ ids: { trakt: traktId, imdb: imdbId } }] };
-      const r = await fetch(`${TRAKT_BASE}/sync/watchlist`, {
-        method: 'POST', headers, body: JSON.stringify(body),
-      });
-      if (r.ok) {
-        return res.send(htmlPage('Added to Watchlist', '👍', 'This title has been added to your Trakt watchlist.'));
+    return await doAction(config, imdbId, type, action, res);
+  } catch (err) {
+    if (err instanceof TraktAuthError) {
+      const newConfig = await refreshToken(config);
+      if (!newConfig) {
+        return res.status(401).send(htmlPage('Session Expired', '🔑', 'Your Trakt session has expired. Please reinstall the addon to re-authenticate.', '#f59e0b'));
       }
-      return res.status(500).send(htmlPage('Failed', '❌', 'Could not add to watchlist. Try again.', '#ef4444'));
-    }
-
-    if (action === 'dismiss') {
-      const endpoint = type === 'show'
-        ? `${TRAKT_BASE}/recommendations/shows/${traktId}`
-        : `${TRAKT_BASE}/recommendations/movies/${traktId}`;
-      const r = await fetch(endpoint, { method: 'DELETE', headers });
-      if (r.ok || r.status === 204) {
-        return res.send(htmlPage('Dismissed', '👎', 'This title has been removed from your recommendations.', '#6366f1'));
+      await saveRefreshedConfig(uuid, newConfig, redis);
+      try {
+        return await doAction(newConfig, imdbId, type, action, res);
+      } catch {
+        return res.status(502).send(htmlPage('Connection Error', '❌', 'Could not reach Trakt API. Please try again.', '#ef4444'));
       }
-      return res.status(500).send(htmlPage('Failed', '❌', 'Could not dismiss. Try again.', '#ef4444'));
     }
-
-    if (action === 'unwatchlist') {
-      const body = type === 'show'
-        ? { shows: [{ ids: { trakt: traktId, imdb: imdbId } }] }
-        : { movies: [{ ids: { trakt: traktId, imdb: imdbId } }] };
-      const r = await fetch(`${TRAKT_BASE}/sync/watchlist/remove`, { method: 'POST', headers, body: JSON.stringify(body) });
-      if (r.ok) return res.send(htmlPage('Removed from Watchlist', '🗑️', 'Removed from your Trakt watchlist.', '#6366f1'));
-      return res.status(500).send(htmlPage('Failed', '❌', 'Could not remove. Try again.', '#ef4444'));
-    }
-
-    return res.status(400).send(htmlPage('Unknown Action', '⚠️', 'Invalid action requested.', '#f59e0b'));
-  } catch {
     return res.status(502).send(htmlPage('Connection Error', '❌', 'Could not reach Trakt API. Please try again.', '#ef4444'));
   }
 }
