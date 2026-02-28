@@ -122,6 +122,9 @@ const GENRE_LABELS = {
 const MOVIE_GENRE_KEYS = ['overall','action','adventure','animation','comedy','crime','documentary','drama','fantasy','horror','mystery','romance','scifi','thriller','western'];
 const SHOW_GENRE_KEYS  = ['overall','action','adventure','animation','comedy','crime','drama','fantasy','horror','mystery','romance','scifi','thriller'];
 
+const ALL_MOVIE_GENRE_KEYS = [...MOVIE_GENRE_KEYS, 'gems'];
+const ALL_SHOW_GENRE_KEYS  = [...SHOW_GENRE_KEYS,  'gems'];
+
 // ── Manifest ──────────────────────────────────────────────────
 
 const AI_CATALOG_DEFS = [
@@ -210,6 +213,138 @@ function handleManifest(config, res) {
 // ── AI Catalog ────────────────────────────────────────────────
 
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+
+// Fetch Trakt history for the given media type and return formatted lists.
+async function fetchTraktHistory(config, isShow) {
+  const headers = traktHeaders(config.clientId, config.accessToken);
+  const ratingsUrl = isShow
+    ? `${TRAKT_BASE}/users/me/ratings/shows?limit=100&extended=full`
+    : `${TRAKT_BASE}/users/me/ratings/movies?limit=100&extended=full`;
+  const ratingsRaw = await traktFetch(ratingsUrl, headers);
+  const getItem = r => isShow ? r.show : r.movie;
+  const topRated = ratingsRaw
+    .filter(r => r.rating >= 7)
+    .map(r => ({ title: getItem(r).title, year: getItem(r).year }));
+  const disliked = ratingsRaw
+    .filter(r => r.rating <= 6)
+    .slice(0, 20)
+    .map(r => ({ title: getItem(r).title, year: getItem(r).year }));
+
+  const watchedUrl = isShow
+    ? `${TRAKT_BASE}/users/me/watched/shows?limit=100`
+    : `${TRAKT_BASE}/users/me/watched/movies?limit=100`;
+  let watchedTitles = [];
+  try {
+    const watchedRaw = await traktFetch(watchedUrl, headers);
+    watchedTitles = watchedRaw.map(w => isShow ? w.show.title : w.movie.title);
+  } catch { /* non-fatal */ }
+
+  const ratedTitleSet = new Set([...topRated.map(t => t.title), ...disliked.map(d => d.title)]);
+  const watchedNotRated = watchedTitles.filter(t => !ratedTitleSet.has(t)).slice(0, 40);
+
+  const excluded = new Set(config.excludedFromFeed || []);
+  const topRatedActive        = topRated.filter(t => !excluded.has(t.title));
+  const watchedNotRatedActive = watchedNotRated.filter(t => !excluded.has(t));
+
+  return {
+    headers,
+    topRated,
+    disliked,
+    topRatedActive,
+    watchedNotRatedActive,
+  };
+}
+
+// Make ONE Gemini call covering ALL genre keys for the given media type.
+// Parses the JSON object response, resolves IMDB IDs for each genre, writes
+// each genre to its own cache key, and returns a { genre: imdbIds[] } map.
+export async function generateAndCacheAllGenres(mediaType, config, redis, uuid) {
+  const isShow = mediaType === 'series';
+  const weekNum = Math.floor(Date.now() / (7 * 24 * 60 * 60 * 1000));
+  const temperature = [0.7, 0.8, 0.9, 1.0][weekNum % 4];
+
+  let history;
+  try {
+    history = await fetchTraktHistory(config, isShow);
+  } catch {
+    return {};
+  }
+  const { headers, topRatedActive, watchedNotRatedActive, disliked } = history;
+  if (history.topRated.length === 0) return {};
+
+  const ratedList    = topRatedActive.slice(0, 25).map(m => m.title).join(', ') || 'None';
+  const watchedList  = watchedNotRatedActive.slice(0, 20).join(', ') || 'None';
+  const dislikedList = disliked.slice(0, 15).map(m => `${m.title} (${m.year})`).join(', ') || 'None';
+  const mediaLabel   = isShow ? 'TV shows' : 'movies';
+  const customClause = config.customInstructions?.trim()
+    ? `\n\nAdditional instructions from the user: ${config.customInstructions.trim()}`
+    : '';
+
+  const genreKeys = isShow ? ALL_SHOW_GENRE_KEYS : ALL_MOVIE_GENRE_KEYS;
+  const categoryRules = genreKeys.map(k => {
+    if (k === 'overall') return `- overall: best matches for the user's taste, any genre`;
+    if (k === 'gems')    return `- gems: underrated, obscure, or cult classics — NOT mainstream blockbusters or well-known franchises`;
+    return `- ${k}: specifically ${GENRE_LABELS[k]} genre`;
+  }).join('\n');
+
+  const prompt = `You are a ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 40 ${mediaLabel} for EACH of the following categories. Do not recommend anything from the lists above.${customClause}\n\nCategories and their rules:\n${categoryRules}\n\nReturn ONLY a valid JSON object where each key is a category and the value is an array of 40 objects with title and year. No other text:\n{"overall": [{"title": "...", "year": 2023}, ...], ...}`;
+
+  const geminiRes = await fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature, responseMimeType: 'application/json' },
+    }),
+  });
+  if (!geminiRes.ok) return {};
+
+  const geminiData = await geminiRes.json();
+  let parsed;
+  try {
+    parsed = JSON.parse(geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
+  } catch {
+    return {};
+  }
+  if (typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+
+  const traktType = isShow ? 'show' : 'movie';
+  const rawType   = isShow ? 'show' : 'movie';
+  const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
+  const result = {};
+
+  for (const genre of genreKeys) {
+    const items = parsed[genre];
+    if (!Array.isArray(items)) continue;
+    const validItems = items.filter(item => item && typeof item.title === 'string' && item.year);
+    const resolved = await mapConcurrent(validItems, 5, async item => {
+      try {
+        const r = await fetch(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&limit=5`, { headers });
+        if (!r.ok) return null;
+        const data = await r.json();
+        if (!data?.length) return null;
+        const q = norm(item.title);
+        const exact = data.find(d => {
+          const t = d[traktType];
+          return t?.ids?.imdb && norm(t.title || '') === q && Math.abs((t.year || 0) - item.year) <= 1;
+        });
+        if (exact) return exact[traktType].ids.imdb;
+        const top = data[0]?.[traktType];
+        if (top?.ids?.imdb && Math.abs((top.year || 0) - item.year) <= 1) return top.ids.imdb;
+        return null;
+      } catch { return null; }
+    });
+    const imdbIds = resolved.filter(id => id && /^tt\d+$/.test(id));
+    result[genre] = imdbIds;
+    if (redis && uuid && imdbIds.length > 0) {
+      const cacheKey = `ai:${uuid}:ai-${rawType}-${genre}`;
+      try { await redis.set(cacheKey, JSON.stringify(imdbIds), { ex: 2592000 }); } catch { /* non-fatal */ }
+    }
+  }
+
+  return result;
+}
+
 const RPDB_FREE_KEY = 't0-free-rpdb';
 function rpdbPoster(imdbId) {
   return `https://api.ratingposterdb.com/${RPDB_FREE_KEY}/imdb/poster-default/${imdbId}.jpg`;
@@ -236,107 +371,9 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
   // Don't call Gemini for non-first pages when cache is cold
   if (skip > 0) return res.json({ metas: [] });
 
-  const headers = traktHeaders(config.clientId, config.accessToken);
-  const isShow = mediaType === 'series';
-
-  // Temperature cycles weekly: 0.7 → 0.8 → 0.9 → 1.0 → repeat
-  const weekNum = Math.floor(Date.now() / (7 * 24 * 60 * 60 * 1000));
-  const temperature = [0.7, 0.8, 0.9, 1.0][weekNum % 4];
-
-  // Fetch all ratings at once, split into liked (≥7) and disliked (≤6)
-  const ratingsUrl = isShow
-    ? `${TRAKT_BASE}/users/me/ratings/shows?limit=100&extended=full`
-    : `${TRAKT_BASE}/users/me/ratings/movies?limit=100&extended=full`;
-  const ratingsRaw = await traktFetch(ratingsUrl, headers);
-  const getItem = r => isShow ? r.show : r.movie;
-  const topRated = ratingsRaw
-    .filter(r => r.rating >= 7)
-    .map(r => ({ title: getItem(r).title, year: getItem(r).year }));
-  const disliked = ratingsRaw
-    .filter(r => r.rating <= 6)
-    .slice(0, 20)
-    .map(r => ({ title: getItem(r).title, year: getItem(r).year }));
-
-  if (topRated.length === 0) return res.json({ metas: [] });
-
-  // Fetch watched history — used as both positive signal and exclusion list
-  const watchedUrl = isShow
-    ? `${TRAKT_BASE}/users/me/watched/shows?limit=100`
-    : `${TRAKT_BASE}/users/me/watched/movies?limit=100`;
-  let watchedTitles = [];
-  try {
-    const watchedRaw = await traktFetch(watchedUrl, headers);
-    watchedTitles = watchedRaw.map(w => isShow ? w.show.title : w.movie.title);
-  } catch { /* non-fatal */ }
-
-  // Watched-but-not-rated = secondary positive signal (user watched it, implied interest)
-  const ratedTitleSet = new Set([...topRated.map(t => t.title), ...disliked.map(d => d.title)]);
-  const watchedNotRated = watchedTitles.filter(t => !ratedTitleSet.has(t)).slice(0, 40);
-
-  // Filter user-excluded titles from positive signal (still kept in allSeenList so they won't be recommended)
-  const excluded = new Set(config.excludedFromFeed || []);
-  const topRatedActive        = topRated.filter(t => !excluded.has(t.title));
-  const watchedNotRatedActive = watchedNotRated.filter(t => !excluded.has(t));
-
-  const ratedList    = topRatedActive.slice(0, 25).map(m => m.title).join(', ') || 'None';
-  const watchedList  = watchedNotRatedActive.slice(0, 20).join(', ') || 'None';
-  const dislikedList = disliked.slice(0, 15).map(m => `${m.title} (${m.year})`).join(', ') || 'None';
-  const mediaLabel   = isShow ? 'TV shows' : 'movies';
-  const isGems       = genreKey === 'gems';
-  const genreLabel   = (!isGems && GENRE_LABELS[genreKey]) || null;
-  const genreClause  = genreLabel ? ` that are specifically in the ${genreLabel} genre` : '';
-  const customClause = config.customInstructions?.trim()
-    ? `\n\nAdditional instructions from the user: ${config.customInstructions.trim()}`
-    : '';
-
-  const prompt = isGems
-    ? `You are a hidden gems ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 40 underrated, obscure, or cult classic ${mediaLabel} matching the user's taste — NOT mainstream blockbusters, franchises, or well-known Oscar winners. Do not recommend anything from the lists above.${customClause}\nReturn ONLY a valid JSON array of 40 objects with title and year, no other text:\n[{"title": "Movie Name", "year": 2023}, ...]`
-    : `You are a ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 40 ${mediaLabel}${genreClause} matching the user's taste. Do not recommend anything from the lists above.${customClause}\nReturn ONLY a valid JSON array of 40 objects with title and year, no other text:\n[{"title": "Movie Name", "year": 2023}, ...]`;
-
-  // Call Gemini
-  const geminiRes = await fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature, responseMimeType: 'application/json' } }),
-  });
-  if (!geminiRes.ok) return res.json({ metas: [] });
-
-  const geminiData = await geminiRes.json();
-
-  let parsed;
-  try {
-    parsed = JSON.parse(geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '[]');
-  } catch {
-    return res.json({ metas: [] });
-  }
-
-  const traktType = isShow ? 'show' : 'movie';
-  const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
-  const items = parsed.filter(item => item && typeof item.title === 'string' && item.year);
-  const resolved = await mapConcurrent(items, 5, async item => {
-    try {
-      const r = await fetch(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&limit=5`, { headers });
-      if (!r.ok) return null;
-      const data = await r.json();
-      if (!data?.length) return null;
-      const q = norm(item.title);
-      // Tier 1: normalized exact title + year within 1
-      const exact = data.find(d => {
-        const t = d[traktType];
-        return t?.ids?.imdb && norm(t.title || '') === q && Math.abs((t.year || 0) - item.year) <= 1;
-      });
-      if (exact) return exact[traktType].ids.imdb;
-      // Tier 2: top result if year within 1
-      const top = data[0]?.[traktType];
-      if (top?.ids?.imdb && Math.abs((top.year || 0) - item.year) <= 1) return top.ids.imdb;
-      return null;
-    } catch { return null; }
-  });
-  const imdbIds = resolved.filter(id => id && /^tt\d+$/.test(id));
-
-  if (redis && cacheKey && imdbIds.length > 0) {
-    try { await redis.set(cacheKey, JSON.stringify(imdbIds), { ex: 2592000 }); } catch { /* non-fatal */ }
-  }
+  // Batched call: one Gemini request warms all genre keys for this media type at once
+  const allResults = await generateAndCacheAllGenres(mediaType, config, redis, uuid);
+  const imdbIds = allResults?.[genreKey] ?? [];
 
   res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
   return res.json({ metas: imdbIds.slice(0, 40).map(id => ({ id, type: mediaType, poster: rpdbPoster(id) })) });
