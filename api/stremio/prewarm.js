@@ -205,7 +205,7 @@ export default async function handler(req, res) {
     const mediaType = type === 'show' ? 'series' : 'movie';
     const imdbIds = await generateCatalog(config, mediaType, genre);
     if (imdbIds.length > 0) {
-      await redis.set(cacheKey, JSON.stringify(imdbIds), { ex: 172800 });
+      await redis.set(cacheKey, JSON.stringify(imdbIds), { ex: 2592000 });
     }
     return res.json({ status: 'generated', count: imdbIds.length });
   } catch (err) {

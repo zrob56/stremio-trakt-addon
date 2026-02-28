@@ -3,7 +3,7 @@ import { Redis } from '@upstash/redis';
 const TRAKT_BASE = 'https://api.trakt.tv';
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
-const AI_CATALOG_TTL = 172800; // 2 days
+const AI_CATALOG_TTL = 2592000; // 30 days
 const BUDGET_MS = 52000;       // stop generating after 52s (8s margin before 60s timeout)
 const SLEEP_MS = 12500;        // 12.5s gap between Gemini calls → safe under 5 RPM
 
@@ -217,10 +217,11 @@ export default async function handler(req, res) {
       const mediaType = rawType === 'show' ? 'series' : 'movie';
       const cacheKey  = `ai:${uuid}:ai-${rawType}-${genre}`;
 
-      // Skip if cache is still fresh
+      // Skip if cache was set within the last 23h (TTL still has >23h remaining out of 30d)
       try {
-        const exists = await redis.exists(cacheKey);
-        if (exists) { skipped++; continue; }
+        const ttl = await redis.ttl(cacheKey);
+        const ageSeconds = ttl >= 0 ? AI_CATALOG_TTL - ttl : AI_CATALOG_TTL;
+        if (ageSeconds < 23 * 3600) { skipped++; continue; }
       } catch { skipped++; continue; }
 
       // Generate and cache

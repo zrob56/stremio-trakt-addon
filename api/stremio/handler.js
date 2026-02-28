@@ -334,7 +334,7 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
   const imdbIds = resolved.filter(id => id && /^tt\d+$/.test(id));
 
   if (redis && cacheKey && imdbIds.length > 0) {
-    try { await redis.set(cacheKey, JSON.stringify(imdbIds), { ex: 172800 }); } catch { /* non-fatal */ }
+    try { await redis.set(cacheKey, JSON.stringify(imdbIds), { ex: 2592000 }); } catch { /* non-fatal */ }
   }
 
   res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
