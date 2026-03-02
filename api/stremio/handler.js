@@ -345,7 +345,7 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, uuid) 
   return result;
 }
 
-const RPDB_FREE_KEY = 't0-free-rpdb';
+const RPDB_FREE_KEY = 't0-free-rpdb-rounded-blocks';
 function rpdbPoster(imdbId) {
   return `https://api.ratingposterdb.com/${RPDB_FREE_KEY}/imdb/poster-default/${imdbId}.jpg`;
 }
@@ -371,61 +371,42 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
   // Don't call Gemini for non-first pages when cache is cold
   if (skip > 0) return res.json({ metas: [] });
 
-  // Batched call: one Gemini request warms all genre keys for this media type at once
-  const allResults = await generateAndCacheAllGenres(mediaType, config, redis, uuid);
-  const imdbIds = allResults?.[genreKey] ?? [];
+  // Redis lock: only one request per user+mediaType triggers Gemini generation.
+  // All other parallel requests return empty immediately; Stremio retries automatically.
+  const lockKey = redis && uuid
+    ? `ai-lock:${uuid}:${mediaType === 'series' ? 'show' : 'movie'}`
+    : null;
+  let lockAcquired = false;
+  if (lockKey) {
+    try {
+      const lockResult = await redis.set(lockKey, '1', { nx: true, ex: 300 }); // 5min safety TTL
+      lockAcquired = lockResult === 'OK';
+    } catch { /* non-fatal */ }
+    if (!lockAcquired) {
+      return res.json({ metas: [] });
+    }
+  }
 
-  res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
-  return res.json({ metas: imdbIds.slice(0, 40).map(id => ({ id, type: mediaType, poster: rpdbPoster(id) })) });
+  try {
+    // Batched call: one Gemini request warms all genre keys for this media type at once
+    const allResults = await generateAndCacheAllGenres(mediaType, config, redis, uuid);
+    const imdbIds = allResults?.[genreKey] ?? [];
+    res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
+    return res.json({ metas: imdbIds.slice(0, 40).map(id => ({ id, type: mediaType, poster: rpdbPoster(id) })) });
+  } finally {
+    if (lockKey && lockAcquired) {
+      try { await redis.del(lockKey); } catch { /* non-fatal */ }
+    }
+  }
 }
 
 // ── AI Search ─────────────────────────────────────────────────
 
-async function handleAISearch(config, mediaType, query, res, uuid = null) {
-  if (!query?.trim()) return res.json({ metas: [] });
+const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
 
-  const redis = uuid ? getRedis() : null;
-  const cacheKey = uuid ? `ai-search:${uuid}:${query.trim().toLowerCase()}` : null;
-  if (redis && cacheKey) {
-    try {
-      const cached = await redis.get(cacheKey);
-      if (cached) {
-        const data = typeof cached === 'string' ? JSON.parse(cached) : cached;
-        // Normalize: old format is object[], new format is string[]
-        const ids = (data.length > 0 && typeof data[0] !== 'string')
-          ? data.map(m => m.id).filter(Boolean)
-          : data;
-        return res.json({ metas: ids.map(id => ({ id, type: mediaType, poster: rpdbPoster(id) })) });
-      }
-    } catch { /* non-fatal */ }
-  }
-
-  const isShow = mediaType === 'series';
-  const mediaLabel = isShow ? 'TV shows' : 'movies';
-  const traktType = isShow ? 'show' : 'movie';
-  const headers = traktHeaders(config.clientId, config.accessToken);
-
-  const prompt = `You are a ${mediaLabel} search engine that understands natural language queries.\n\nThe user searched for: "${query.trim()}"\n\nReturn exactly 10 ${mediaLabel} that best match this search. Interpret the query broadly — include titles, themes, time periods, styles, and subgenres that fit.\n\nReturn ONLY a valid JSON array of 10 objects with title and year, no other text:\n[{"title": "Movie Name", "year": 2023}, ...]`;
-
-  const geminiRes = await fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7, responseMimeType: 'application/json' } }),
-  });
-  if (!geminiRes.ok) return res.json({ metas: [] });
-
-  const geminiData = await geminiRes.json();
-
-  let parsed;
-  try {
-    parsed = JSON.parse(geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '[]');
-  } catch {
-    return res.json({ metas: [] });
-  }
-
-  const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
-  const items = parsed.filter(item => item && typeof item.title === 'string' && item.year);
-  const resolved = await mapConcurrent(items, 5, async item => {
+async function resolveImdbIds(items, traktType, headers) {
+  const filtered = items.filter(item => item && typeof item.title === 'string' && item.year);
+  const resolved = await mapConcurrent(filtered, 5, async item => {
     try {
       const r = await fetch(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&limit=5`, { headers });
       if (!r.ok) return null;
@@ -444,14 +425,91 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
       return null;
     } catch { return null; }
   });
-  const imdbIds = resolved.filter(id => id && /^tt\d+$/.test(id));
+  return resolved.filter(id => id && /^tt\d+$/.test(id));
+}
 
-  if (redis && cacheKey && imdbIds.length > 0) {
-    try { await redis.set(cacheKey, JSON.stringify(imdbIds), { ex: 3600 }); } catch { /* non-fatal */ }
+async function handleAISearch(config, mediaType, query, res, uuid = null) {
+  if (!query?.trim()) return res.json({ metas: [] });
+
+  const redis = uuid ? getRedis() : null;
+  const cacheKey = uuid ? `ai-search:${uuid}:${query.trim().toLowerCase()}` : null;
+
+  // Check cache — new format is { movie: [...], series: [...] }
+  if (redis && cacheKey) {
+    try {
+      const cached = await redis.get(cacheKey);
+      if (cached) {
+        const data = typeof cached === 'string' ? JSON.parse(cached) : cached;
+        if (data && typeof data === 'object' && !Array.isArray(data) && (data.movie || data.series)) {
+          const ids = data[mediaType] || [];
+          return res.json({ metas: ids.map(id => ({ id, type: mediaType, poster: rpdbPoster(id) })) });
+        }
+      }
+    } catch { /* non-fatal */ }
+  }
+
+  const headers = traktHeaders(config.clientId, config.accessToken);
+  const q = query.trim();
+  const normQ = norm(q);
+
+  const prompt = `You are a movie and TV show search engine that understands natural language queries.\n\nThe user searched for: "${q}"\n\nReturn exactly 10 movies and 10 TV shows that best match this search. Interpret the query broadly — include titles, themes, time periods, styles, and subgenres that fit.\n\nReturn ONLY a valid JSON object with title and year arrays, no other text:\n{"movies": [{"title": "Movie Name", "year": 2023}], "shows": [{"title": "Show Name", "year": 2023}]}`;
+
+  // Run exact Trakt title search + Gemini call concurrently
+  const [exactMovieData, exactShowData, geminiRes] = await Promise.all([
+    fetch(`${TRAKT_BASE}/search/movie?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
+    fetch(`${TRAKT_BASE}/search/show?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
+    fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7, responseMimeType: 'application/json' } }),
+    }),
+  ]);
+
+  // Exact Trakt matches (normalized title match)
+  const exactMovieIds = (Array.isArray(exactMovieData) ? exactMovieData : [])
+    .filter(d => d?.movie?.ids?.imdb && norm(d.movie.title || '') === normQ)
+    .map(d => d.movie.ids.imdb)
+    .filter(id => /^tt\d+$/.test(id));
+  const exactShowIds = (Array.isArray(exactShowData) ? exactShowData : [])
+    .filter(d => d?.show?.ids?.imdb && norm(d.show.title || '') === normQ)
+    .map(d => d.show.ids.imdb)
+    .filter(id => /^tt\d+$/.test(id));
+
+  // Parse Gemini response
+  let parsed = { movies: [], shows: [] };
+  if (geminiRes.ok) {
+    try {
+      const geminiData = await geminiRes.json();
+      const raw = JSON.parse(geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
+      if (Array.isArray(raw.movies)) parsed.movies = raw.movies;
+      if (Array.isArray(raw.shows)) parsed.shows = raw.shows;
+    } catch { /* use empty */ }
+  }
+
+  // Resolve Gemini suggestions to IMDb IDs for both types concurrently
+  const [aiMovieIds, aiShowIds] = await Promise.all([
+    resolveImdbIds(parsed.movies, 'movie', headers),
+    resolveImdbIds(parsed.shows, 'show', headers),
+  ]);
+
+  // Merge: exact match first, then AI results (deduplicated)
+  const mergeIds = (exact, ai) => {
+    const seen = new Set(exact);
+    const result = [...exact];
+    for (const id of ai) { if (!seen.has(id)) { seen.add(id); result.push(id); } }
+    return result;
+  };
+
+  const movieIds = mergeIds(exactMovieIds, aiMovieIds);
+  const showIds  = mergeIds(exactShowIds,  aiShowIds);
+
+  if (redis && cacheKey && (movieIds.length > 0 || showIds.length > 0)) {
+    try { await redis.set(cacheKey, JSON.stringify({ movie: movieIds, series: showIds }), { ex: 3600 }); } catch { /* non-fatal */ }
   }
 
   res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
-  return res.json({ metas: imdbIds.map(id => ({ id, type: mediaType, poster: rpdbPoster(id) })) });
+  const ids = mediaType === 'movie' ? movieIds : showIds;
+  return res.json({ metas: ids.map(id => ({ id, type: mediaType, poster: rpdbPoster(id) })) });
 }
 
 // ── Meta ──────────────────────────────────────────────────────
