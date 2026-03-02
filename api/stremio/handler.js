@@ -403,6 +403,8 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
 // ── AI Search ─────────────────────────────────────────────────
 
 const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
+// norm() but also strips leading articles ("the ", "a ", "an ")
+const normTitle = s => norm(s).replace(/^(the|a|an) /, '');
 
 async function resolveImdbIds(items, traktType, headers) {
   const filtered = items.filter(item => item && typeof item.title === 'string' && item.year);
@@ -413,10 +415,12 @@ async function resolveImdbIds(items, traktType, headers) {
       const data = await r.json();
       if (!data?.length) return null;
       const q = norm(item.title);
-      // Tier 1: normalized exact title + year within 1
+      const qt = normTitle(item.title);
+      // Tier 1: normalized exact title (or article-stripped) + year within 1
       const exact = data.find(d => {
         const t = d[traktType];
-        return t?.ids?.imdb && norm(t.title || '') === q && Math.abs((t.year || 0) - item.year) <= 1;
+        if (!t?.ids?.imdb || Math.abs((t.year || 0) - item.year) > 1) return false;
+        return norm(t.title || '') === q || normTitle(t.title || '') === qt;
       });
       if (exact) return exact[traktType].ids.imdb;
       // Tier 2: top result if year within 1
@@ -452,7 +456,7 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
   const q = query.trim();
   const normQ = norm(q);
 
-  const prompt = `You are a movie and TV show search engine that understands natural language queries.\n\nThe user searched for: "${q}"\n\nReturn exactly 10 movies and 10 TV shows that best match this search. Interpret the query broadly — include titles, themes, time periods, styles, and subgenres that fit.\n\nReturn ONLY a valid JSON object with title and year arrays, no other text:\n{"movies": [{"title": "Movie Name", "year": 2023}], "shows": [{"title": "Show Name", "year": 2023}]}`;
+  const prompt = `You are a movie and TV show search engine that understands natural language queries.\n\nThe user searched for: "${q}"\n\nReturn exactly 10 movies and 10 TV shows that best match this search. Interpret the query broadly — include titles, themes, time periods, styles, and subgenres that fit. If the query looks like a specific title (possibly with a typo or missing article like "the"), prioritize returning that exact corrected title as the first result.\n\nReturn ONLY a valid JSON object with title and year arrays, no other text:\n{"movies": [{"title": "Movie Name", "year": 2023}], "shows": [{"title": "Show Name", "year": 2023}]}`;
 
   // Run exact Trakt title search + Gemini call concurrently
   const [exactMovieData, exactShowData, geminiRes] = await Promise.all([
@@ -465,13 +469,14 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
     }),
   ]);
 
-  // Exact Trakt matches (normalized title match)
+  // Exact Trakt matches (normalized title match, article-stripped)
+  const normTitleQ = normTitle(q);
   const exactMovieIds = (Array.isArray(exactMovieData) ? exactMovieData : [])
-    .filter(d => d?.movie?.ids?.imdb && norm(d.movie.title || '') === normQ)
+    .filter(d => d?.movie?.ids?.imdb && normTitle(d.movie.title || '') === normTitleQ)
     .map(d => d.movie.ids.imdb)
     .filter(id => /^tt\d+$/.test(id));
   const exactShowIds = (Array.isArray(exactShowData) ? exactShowData : [])
-    .filter(d => d?.show?.ids?.imdb && norm(d.show.title || '') === normQ)
+    .filter(d => d?.show?.ids?.imdb && normTitle(d.show.title || '') === normTitleQ)
     .map(d => d.show.ids.imdb)
     .filter(id => /^tt\d+$/.test(id));
 
