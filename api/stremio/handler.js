@@ -413,18 +413,18 @@ const normTitle = s => norm(s).replace(/^(the|a|an) /, '');
 async function handleAISearch(config, mediaType, query, res, uuid = null) {
   if (!query?.trim()) return res.json({ metas: [] });
 
-  // Make the cache key specific to the mediaType so they don't overwrite each other
   const redis = uuid ? getRedis() : null;
-  const cacheKey = uuid ? `ai-search:${uuid}:${mediaType}:${query.trim().toLowerCase()}` : null;
+  // Shared cache key for both types to ensure one AI call satisfies both Stremio rows
+  const cacheKey = uuid ? `ai-search:${uuid}:${query.trim().toLowerCase()}` : null;
 
   if (redis && cacheKey) {
     try {
       const cached = await redis.get(cacheKey);
       if (cached) {
-        const ids = typeof cached === 'string' ? JSON.parse(cached) : cached;
-        if (Array.isArray(ids)) {
-          const stremioType = mediaType === 'series' ? 'series' : 'movie';
-          return res.json({ metas: ids.map(id => ({ id, type: stremioType, poster: rpdbPoster(id) })) });
+        const data = typeof cached === 'string' ? JSON.parse(cached) : cached;
+        if (data && typeof data === 'object' && !Array.isArray(data)) {
+          const ids = data[mediaType] || [];
+          return res.json({ metas: ids.map(id => ({ id, type: mediaType, poster: rpdbPoster(id) })) });
         }
       }
     } catch { /* non-fatal */ }
@@ -432,61 +432,74 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
 
   const headers = traktHeaders(config.clientId, config.accessToken);
   const q = query.trim();
-  const limit = 10;
 
-  // Setup dynamic variables based on what Stremio is asking for
-  const isMovie = mediaType === 'movie';
-  const typeLabel = isMovie ? 'movies' : 'TV shows';
-  const jsonKey = isMovie ? 'movies' : 'shows';
-  const traktSearchType = isMovie ? 'movie' : 'show';
+  // Combined prompt asking for 10 of each type
+  const prompt = `You are a movie and TV show search engine.
+The user searched for: "${q}"
 
-  // Dynamic Prompt: Only asks for movies for the movie row, and shows for the show row
-  const prompt = `You are a search engine that understands natural language queries.\n\nThe user searched for: "${q}"\n\nReturn exactly ${limit} ${typeLabel} that best match this search. Interpret the query broadly — include titles, themes, time periods, styles, and subgenres that fit. If the query looks like a specific title (possibly with a typo or missing article like "the"), prioritize returning that exact corrected title as the first result.\n\nReturn ONLY a valid JSON object, no other text:\n{"${jsonKey}": [{"title": "Name", "year": 2024}]}`;
+Return exactly 10 movies and 10 TV shows that best match this search. Interpret the query broadly (themes, styles, genres). If the query looks like a specific title, prioritize that exact corrected title as the first result.
 
-  // Run exact Trakt title search + Gemini call concurrently (only for this specific media type)
-  const [exactData, geminiRes] = await Promise.all([
-    fetch(`${TRAKT_BASE}/search/${traktSearchType}?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
+Return ONLY a valid JSON object with title and year arrays:
+{"movies": [{"title": "Name", "year": 2024}], "shows": [{"title": "Name", "year": 2024}]}`;
+
+  // Execute Trakt exact searches and Gemini recommendation concurrently
+  const [exactMovieData, exactShowData, geminiRes] = await Promise.all([
+    fetch(`${TRAKT_BASE}/search/movie?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : []),
+    fetch(`${TRAKT_BASE}/search/show?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : []),
     fetch(`${GEMINI_SEARCH_BASE}?key=${config.geminiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.1, responseMimeType: 'application/json' } }),
+      body: JSON.stringify({ 
+        contents: [{ parts: [{ text: prompt }] }], 
+        generationConfig: { temperature: 0.1, responseMimeType: 'application/json' } 
+      }),
     }),
   ]);
 
-  // Exact Trakt matches
   const normTitleQ = normTitle(q);
-  const exactIds = (Array.isArray(exactData) ? exactData : [])
-    .filter(d => d?.[traktSearchType]?.ids?.imdb && normTitle(d[traktSearchType].title || '') === normTitleQ)
-    .map(d => d[traktSearchType].ids.imdb)
-    .filter(id => /^tt\d+$/.test(id));
+  const getExactIds = (data, type) => (Array.isArray(data) ? data : [])
+    .filter(d => d?.[type]?.ids?.imdb && normTitle(d[type].title || '') === normTitleQ)
+    .map(d => d[type].ids.imdb);
 
-  // Parse Gemini response
-  let parsedItems = [];
+  const exactMovieIds = getExactIds(exactMovieData, 'movie');
+  const exactShowIds = getExactIds(exactShowData, 'show');
+
+  let parsed = { movies: [], shows: [] };
   if (geminiRes.ok) {
     try {
       const geminiData = await geminiRes.json();
       const raw = JSON.parse(geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
-      if (Array.isArray(raw[jsonKey])) {
-        parsedItems = raw[jsonKey]; 
-      }
+      if (Array.isArray(raw.movies)) parsed.movies = raw.movies;
+      if (Array.isArray(raw.shows)) parsed.shows = raw.shows;
     } catch { /* use empty */ }
   }
 
-  // Resolve Gemini suggestions to IMDb IDs
-  const aiIds = await resolveImdbIds(parsedItems, traktSearchType, headers);
+  // Resolve IMDb IDs for both types in parallel
+  const [aiMovieIds, aiShowIds] = await Promise.all([
+    resolveImdbIds(parsed.movies, 'movie', headers),
+    resolveImdbIds(parsed.shows, 'show', headers),
+  ]);
 
-  // Merge exact match first, then AI results (deduplicated)
-  const seen = new Set(exactIds);
-  const finalIds = [...exactIds];
-  for (const id of aiIds) { if (!seen.has(id)) { seen.add(id); finalIds.push(id); } }
+  const mergeIds = (exact, ai) => {
+    const seen = new Set(exact);
+    const result = [...exact];
+    for (const id of ai) { if (!seen.has(id)) { seen.add(id); result.push(id); } }
+    return result;
+  };
 
-  if (redis && cacheKey && finalIds.length > 0) {
-    try { await redis.set(cacheKey, JSON.stringify(finalIds), { ex: 3600 }); } catch { /* non-fatal */ }
+  const movieIds = mergeIds(exactMovieIds, aiMovieIds);
+  const showIds  = mergeIds(exactShowIds,  aiShowIds);
+
+  // Save the complete search result to Redis
+  if (redis && cacheKey && (movieIds.length > 0 || showIds.length > 0)) {
+    try { 
+      await redis.set(cacheKey, JSON.stringify({ movie: movieIds, series: showIds }), { ex: 3600 }); 
+    } catch { /* non-fatal */ }
   }
 
+  const ids = mediaType === 'movie' ? movieIds : showIds;
   res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
-  const stremioType = mediaType === 'series' ? 'series' : 'movie';
-  return res.json({ metas: finalIds.map(id => ({ id, type: stremioType, poster: rpdbPoster(id) })) });
+  return res.json({ metas: ids.map(id => ({ id, type: mediaType, poster: rpdbPoster(id) })) });
 }
 
 // ── Meta ──────────────────────────────────────────────────────
