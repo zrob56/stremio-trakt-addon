@@ -27,7 +27,9 @@
     {
       "source": "/stremio/:config/catalog/:type/:id.json",
       "destination": "/api/stremio/handler?config=:config&resource=catalog&type=:type&id=:id"
-    },
+    }
+  ],
+    
   "headers": [
     {
       "source": "/api/debrid/(.*)",
