@@ -410,6 +410,29 @@ const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' '
 // norm() but also strips leading articles ("the ", "a ", "an ")
 const normTitle = s => norm(s).replace(/^(the|a|an) /, '');
 
+async function resolveImdbIds(items, traktType, headers) {
+  if (!Array.isArray(items)) return [];
+  const validItems = items.filter(item => item && typeof item.title === 'string' && item.year);
+  const resolved = await mapConcurrent(validItems, 5, async item => {
+    try {
+      const r = await fetch(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&limit=5`, { headers });
+      if (!r.ok) return null;
+      const data = await r.json();
+      if (!data?.length) return null;
+      const q = norm(item.title);
+      const exact = data.find(d => {
+        const t = d[traktType];
+        return t?.ids?.imdb && norm(t.title || '') === q && Math.abs((t.year || 0) - item.year) <= 1;
+      });
+      if (exact) return exact[traktType].ids.imdb;
+      const top = data[0]?.[traktType];
+      if (top?.ids?.imdb && Math.abs((top.year || 0) - item.year) <= 1) return top.ids.imdb;
+      return null;
+    } catch { return null; }
+  });
+  return resolved.filter(id => id && /^tt\d+$/.test(id));
+}
+
 async function handleAISearch(config, mediaType, query, res, uuid = null) {
   if (!query?.trim()) return res.json({ metas: [] });
 
@@ -440,7 +463,7 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
   const [exactMovieData, exactShowData, geminiRes] = await Promise.all([
     fetch(`${TRAKT_BASE}/search/movie?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
     fetch(`${TRAKT_BASE}/search/show?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
-    fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
+    fetch(`${GEMINI_SEARCH_BASE}?key=${config.geminiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7, responseMimeType: 'application/json' } }),
