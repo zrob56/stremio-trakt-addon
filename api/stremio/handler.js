@@ -414,7 +414,7 @@ async function resolveImdbIds(items, traktType, headers) {
   const filtered = items.filter(item => item && typeof item.title === 'string' && item.year);
   
   // Note: if you want the ultra-speed boost, change the 5 below to a 10
-  const resolved = await mapConcurrent(filtered, 5, async item => {
+  const resolved = await mapConcurrent(filtered, 10, async item => {
     try {
       const r = await fetch(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&limit=5`, { headers });
       if (!r.ok) return null;
