@@ -212,7 +212,11 @@ function handleManifest(config, res) {
 
 // ── AI Catalog ────────────────────────────────────────────────
 
-const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+// Smart model for background catalog generation
+const GEMINI_CATALOG_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent';
+
+// Ultra-fast model for real-time search
+const GEMINI_SEARCH_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent';
 
 // Fetch Trakt history for the given media type and return formatted lists.
 async function fetchTraktHistory(config, isShow) {
@@ -289,7 +293,7 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, uuid) 
 
   const prompt = `You are a ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 40 ${mediaLabel} for EACH of the following categories. Do not recommend anything from the lists above.${customClause}\n\nCategories and their rules:\n${categoryRules}\n\nReturn ONLY a valid JSON object where each key is a category and the value is an array of 40 objects with title and year. No other text:\n{"overall": [{"title": "...", "year": 2023}, ...], ...}`;
 
-  const geminiRes = await fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
+  const geminiRes = await fetch(`${GEMINI_CATALOG_BASE}?key=${config.geminiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -464,7 +468,7 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
   const [exactMovieData, exactShowData, geminiRes] = await Promise.all([
     fetch(`${TRAKT_BASE}/search/movie?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
     fetch(`${TRAKT_BASE}/search/show?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
-    fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
+    fetch(`${GEMINI_SEARCH_BASE}?key=${config.geminiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7, responseMimeType: 'application/json' } }),
