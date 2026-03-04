@@ -409,6 +409,11 @@ const normTitle = s => norm(s).replace(/^(the|a|an) /, '');
 async function resolveImdbIds(items, traktType, headers) {
   const filtered = items.filter(item => item && typeof item.title === 'string' && item.year);
   const resolved = await mapConcurrent(filtered, 5, async item => {
+    // NEW: If Gemini provided a valid IMDb ID, skip the Trakt search completely!
+    if (item.imdb_id && /^tt\d+$/.test(item.imdb_id)) {
+      return item.imdb_id;
+    }
+    
     try {
       const r = await fetch(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&limit=5`, { headers });
       if (!r.ok) return null;
@@ -430,7 +435,7 @@ async function resolveImdbIds(items, traktType, headers) {
     } catch { return null; }
   });
   return resolved.filter(id => id && /^tt\d+$/.test(id));
-}
+}  
 
 async function handleAISearch(config, mediaType, query, res, uuid = null) {
   if (!query?.trim()) return res.json({ metas: [] });
@@ -456,7 +461,7 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
   const q = query.trim();
   const normQ = norm(q);
 
-  const prompt = `You are a movie and TV show search engine that understands natural language queries.\n\nThe user searched for: "${q}"\n\nReturn exactly 10 movies and 10 TV shows that best match this search. Interpret the query broadly — include titles, themes, time periods, styles, and subgenres that fit. If the query looks like a specific title (possibly with a typo or missing article like "the"), prioritize returning that exact corrected title as the first result.\n\nReturn ONLY a valid JSON object with title and year arrays, no other text:\n{"movies": [{"title": "Movie Name", "year": 2023}], "shows": [{"title": "Show Name", "year": 2023}]}`;
+ const prompt = `You are a movie and TV show search engine that understands natural language queries.\n\nThe user searched for: "${q}"\n\nReturn exactly 10 movies and 10 TV shows that best match this search. Interpret the query broadly — include titles, themes, time periods, styles, and subgenres that fit. If the query looks like a specific title (possibly with a typo or missing article like "the"), prioritize returning that exact corrected title as the first result.\n\nReturn ONLY a valid JSON object with title, year, and the official IMDb ID (e.g. tt1234567), no other text:\n{"movies": [{"title": "Movie Name", "year": 2023, "imdb_id": "tt1234567"}], "shows": [{"title": "Show Name", "year": 2023, "imdb_id": "tt7654321"}]}`;
 
   // Run exact Trakt title search + Gemini call concurrently
   const [exactMovieData, exactShowData, geminiRes] = await Promise.all([
