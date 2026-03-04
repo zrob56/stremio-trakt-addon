@@ -441,18 +441,18 @@ async function resolveImdbIds(items, traktType, headers) {
 async function handleAISearch(config, mediaType, query, res, uuid = null) {
   if (!query?.trim()) return res.json({ metas: [] });
 
+  // Make the cache key specific to the mediaType so they don't overwrite each other
   const redis = uuid ? getRedis() : null;
-  const cacheKey = uuid ? `ai-search:${uuid}:${query.trim().toLowerCase()}` : null;
+  const cacheKey = uuid ? `ai-search:${uuid}:${mediaType}:${query.trim().toLowerCase()}` : null;
 
-  // Check cache — new format is { movie: [...], series: [...] }
   if (redis && cacheKey) {
     try {
       const cached = await redis.get(cacheKey);
       if (cached) {
-        const data = typeof cached === 'string' ? JSON.parse(cached) : cached;
-        if (data && typeof data === 'object' && !Array.isArray(data) && (data.movie || data.series)) {
-          const ids = data[mediaType] || [];
-          return res.json({ metas: ids.map(id => ({ id, type: mediaType, poster: rpdbPoster(id) })) });
+        const ids = typeof cached === 'string' ? JSON.parse(cached) : cached;
+        if (Array.isArray(ids)) {
+          const stremioType = mediaType === 'series' ? 'series' : 'movie';
+          return res.json({ metas: ids.map(id => ({ id, type: stremioType, poster: rpdbPoster(id) })) });
         }
       }
     } catch { /* non-fatal */ }
@@ -460,48 +460,111 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
 
   const headers = traktHeaders(config.clientId, config.accessToken);
   const q = query.trim();
-  const normQ = norm(q);
+  const limit = 10; // Upped back to 10 for a fuller screen!
 
- const prompt = `You are a movie and TV show search engine that understands natural language queries.\n\nThe user searched for: "${q}"\n\nReturn exactly 5 movies and 5 TV shows that best match this search. Interpret the query broadly — include titles, themes, time periods, styles, and subgenres that fit. If the query looks like a specific title (possibly with a typo or missing article like "the"), prioritize returning that exact corrected title as the first result.\n\nReturn ONLY a valid JSON object with title and year arrays, no other text:\n{"movies": [{"title": "Movie Name", "year": 2023}], "shows": [{"title": "Show Name", "year": 2023}]}`;
+  // Setup type-specific variables for the split prompt
+  const isMovie = mediaType === 'movie';
+  const typeLabel = isMovie ? 'movie' : 'TV show';
+  const shortKey = isMovie ? 'm' : 's';
+  const traktSearchType = isMovie ? 'movie' : 'show';
 
-  // Run exact Trakt title search + Gemini call concurrently
-  const [exactMovieData, exactShowData, geminiRes] = await Promise.all([
-    fetch(`${TRAKT_BASE}/search/movie?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
-    fetch(`${TRAKT_BASE}/search/show?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
+  // Ask ONLY for the specific type requested by Stremio
+  const prompt = `You are a search engine. Return exactly ${limit} ${typeLabel}s for: "${q}". 
+Interpret the query broadly to include related themes, subgenres, or corrected titles.
+Return ONLY valid JSON using ultra-short keys (${shortKey}=${typeLabel}s, t=title, y=year):
+{"${shortKey}": [{"t": "Name", "y": 2024}]}`;
+
+  // Run exact Trakt title search + Gemini call concurrently (only for this specific media type)
+  const [exactData, geminiRes] = await Promise.all([
+    fetch(`${TRAKT_BASE}/search/${traktSearchType}?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
     fetch(`${GEMINI_SEARCH_BASE}?key=${config.geminiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7, responseMimeType: 'application/json' } }),
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.1, responseMimeType: 'application/json' } }),
     }),
   ]);
 
-  // Exact Trakt matches (normalized title match, article-stripped)
+  // Exact Trakt matches
   const normTitleQ = normTitle(q);
-  const exactMovieIds = (Array.isArray(exactMovieData) ? exactMovieData : [])
-    .filter(d => d?.movie?.ids?.imdb && normTitle(d.movie.title || '') === normTitleQ)
-    .map(d => d.movie.ids.imdb)
-    .filter(id => /^tt\d+$/.test(id));
-  const exactShowIds = (Array.isArray(exactShowData) ? exactShowData : [])
-    .filter(d => d?.show?.ids?.imdb && normTitle(d.show.title || '') === normTitleQ)
-    .map(d => d.show.ids.imdb)
+  const exactIds = (Array.isArray(exactData) ? exactData : [])
+    .filter(d => d?.[traktSearchType]?.ids?.imdb && normTitle(d[traktSearchType].title || '') === normTitleQ)
+    .map(d => d[traktSearchType].ids.imdb)
     .filter(id => /^tt\d+$/.test(id));
 
   // Parse Gemini response
-  let parsed = { movies: [], shows: [] };
+  let parsedItems = [];
   if (geminiRes.ok) {
     try {
       const geminiData = await geminiRes.json();
       const raw = JSON.parse(geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
-      if (Array.isArray(raw.movies)) parsed.movies = raw.movies;
-      if (Array.isArray(raw.shows)) parsed.shows = raw.shows;
+      if (Array.isArray(raw[shortKey])) {
+        parsedItems = raw[shortKey].map(i => ({ title: i.t, year: i.y }));
+      }
     } catch { /* use empty */ }
   }
 
-  // Resolve Gemini suggestions to IMDb IDs for both types concurrently
-  const [aiMovieIds, aiShowIds] = await Promise.all([
-    resolveImdbIds(parsed.movies, 'movie', headers),
-    resolveImdbIds(parsed.shows, 'show', headers),
+  // Resolve Gemini suggestions to IMDb IDs
+  const aiIds = await resolveImdbIds(parsedItems, traktSearchType, headers);
+
+  // Merge exact match first, then AI results (deduplicated)
+  const seen = new Set(exactIds);
+  const finalIds = [...exactIds];
+  for (const id of aiIds) { if (!seen.has(id)) { seen.add(id); finalIds.push(id); } }
+
+  if (redis && cacheKey && finalIds.length > 0) {
+    try { await redis.set(cacheKey, JSON.stringify(finalIds), { ex: 3600 }); } catch { /* non-fatal */ }
+  }
+
+  res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
+  const stremioType = mediaType === 'series' ? 'series' : 'movie';
+  return res.json({ metas: finalIds.map(id => ({ id, type: stremioType, poster: rpdbPoster(id) })) });
+}
+
+  const headers = traktHeaders(config.clientId, config.accessToken);
+  const q = query.trim();
+  const limit = 10;
+
+  // Setup dynamic variables based on what Stremio is asking for
+  const isMovie = mediaType === 'movie';
+  const typeLabel = isMovie ? 'movies' : 'TV shows';
+  const jsonKey = isMovie ? 'movies' : 'shows';
+  const traktSearchType = isMovie ? 'movie' : 'show';
+
+  // Dynamic Prompt: Only asks for movies for the movie row, and shows for the show row
+  const prompt = `You are a search engine that understands natural language queries.\n\nThe user searched for: "${q}"\n\nReturn exactly ${limit} ${typeLabel} that best match this search. Interpret the query broadly — include titles, themes, time periods, styles, and subgenres that fit. If the query looks like a specific title (possibly with a typo or missing article like "the"), prioritize returning that exact corrected title as the first result.\n\nReturn ONLY a valid JSON object, no other text:\n{"${jsonKey}": [{"title": "Name", "year": 2024}]}`;
+
+  // Run exact Trakt title search + Gemini call concurrently (only for this specific media type)
+  const [exactData, geminiRes] = await Promise.all([
+    fetch(`${TRAKT_BASE}/search/${traktSearchType}?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
+    fetch(`${GEMINI_SEARCH_BASE}?key=${config.geminiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.1, responseMimeType: 'application/json' } }),
+    }),
   ]);
+
+  // Exact Trakt matches
+  const normTitleQ = normTitle(q);
+  const exactIds = (Array.isArray(exactData) ? exactData : [])
+    .filter(d => d?.[traktSearchType]?.ids?.imdb && normTitle(d[traktSearchType].title || '') === normTitleQ)
+    .map(d => d[traktSearchType].ids.imdb)
+    .filter(id => /^tt\d+$/.test(id));
+
+  // Parse Gemini response (Notice how clean this is without the micro-keys!)
+  let parsedItems = [];
+  if (geminiRes.ok) {
+    try {
+      const geminiData = await geminiRes.json();
+      const raw = JSON.parse(geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
+      if (Array.isArray(raw[jsonKey])) {
+        parsedItems = raw[jsonKey]; // It already has the proper 'title' and 'year' keys!
+      }
+    } catch { /* use empty */ }
+  }
+
+  // Resolve Gemini suggestions to IMDb IDs
+  const aiIds = await resolveImdbIds(parsedItems, traktSearchType, headers);
+  
 
   // Merge: exact match first, then AI results (deduplicated)
   const mergeIds = (exact, ai) => {
