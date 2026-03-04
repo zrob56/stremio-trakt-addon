@@ -6,8 +6,10 @@
       "schedule": "0 12 * * *"
     }
   ],
-  "redirects": [
-    { "source": "/", "destination": "/Stremio/index.html", "permanent": false }
+ "redirects": [
+    { "source": "/", "destination": "/Stremio/index.html", "permanent": false },
+    { "source": "/configure", "destination": "/Stremio/index.html", "permanent": false },
+    { "source": "/stremio/:config/configure", "destination": "/Stremio/index.html", "permanent": false }
   ],
   "rewrites": [
     {
