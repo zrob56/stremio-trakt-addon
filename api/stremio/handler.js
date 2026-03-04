@@ -206,7 +206,6 @@ function handleManifest(config, res) {
     types: ['movie', 'series'],
     catalogs,
     behaviorHints: { configurable: true },
-    idPrefixes: ['tt'],
   });
 }
 
@@ -518,92 +517,6 @@ async function handleAISearch(config, mediaType, query, res, uuid = null) {
   return res.json({ metas: ids.map(id => ({ id, type: mediaType, poster: rpdbPoster(id) })) });
 }
 
-// ── Meta ──────────────────────────────────────────────────────
-
-async function handleMeta(config, type, id, res) {
-  const imdbId = id;
-  const traktType = type === 'series' ? 'show' : 'movie';
-
-  // Check Redis cache
-  const redis = getRedis();
-  const cacheKey = `meta:${imdbId}:${traktType}`;
-  if (redis) {
-    try {
-      const cached = await redis.get(cacheKey);
-      if (cached) {
-        res.setHeader('Cache-Control', 'public, s-maxage=604800');
-        return res.json({ meta: typeof cached === 'string' ? JSON.parse(cached) : cached });
-      }
-    } catch { /* non-fatal */ }
-  }
-
-  const headers = traktHeaders(config.clientId, config.accessToken);
-
-  // Look up by IMDB ID to get Trakt slug
-  let slug;
-  try {
-    const searchRes = await fetch(`${TRAKT_BASE}/search/imdb/${imdbId}?type=${traktType}`, { headers });
-    if (!searchRes.ok) return res.json({ meta: null });
-    const searchData = await searchRes.json();
-    if (!searchData?.length) return res.json({ meta: null });
-    slug = searchData[0][traktType]?.ids?.slug;
-    if (!slug) return res.json({ meta: null });
-  } catch {
-    return res.json({ meta: null });
-  }
-
-  // Parallel: detail + people
-  let detail, peopleData;
-  try {
-    const [detailRes, peopleRes] = await Promise.all([
-      fetch(`${TRAKT_BASE}/${traktType}s/${slug}?extended=full`, { headers }),
-      fetch(`${TRAKT_BASE}/${traktType}s/${slug}/people`, { headers }),
-    ]);
-    detail = detailRes.ok ? await detailRes.json() : null;
-    peopleData = peopleRes.ok ? await peopleRes.json() : null;
-  } catch {
-    return res.json({ meta: null });
-  }
-
-  if (!detail) return res.json({ meta: null });
-
-  const cast = (peopleData?.cast || []).slice(0, 5).map(c => c.person?.name).filter(Boolean);
-  const directors = (peopleData?.crew?.directing || [])
-    .filter(c => c.jobs?.includes('Director'))
-    .slice(0, 2)
-    .map(c => c.person?.name)
-    .filter(Boolean);
-
-  // Extract YouTube trailer ID if present
-  let trailers;
-  if (detail.trailer) {
-    const ytMatch = detail.trailer.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\s]+)/);
-    if (ytMatch) trailers = [{ source: 'yt', key: ytMatch[1] }];
-  }
-
-  const meta = {
-    id: imdbId,
-    type,
-    name: detail.title,
-    description: detail.overview || undefined,
-    releaseInfo: detail.year ? String(detail.year) : undefined,
-    imdbRating: detail.rating ? detail.rating.toFixed(1) : undefined,
-    poster: rpdbPoster(imdbId),
-    genres: detail.genres || undefined,
-    cast: cast.length > 0 ? cast : undefined,
-    ...(traktType === 'movie' && directors.length > 0 ? { director: directors } : {}),
-    ...(traktType === 'movie' && detail.runtime ? { runtime: `${detail.runtime} min` } : {}),
-    ...(trailers ? { trailers } : {}),
-  };
-
-  if (redis) {
-    try { await redis.set(cacheKey, JSON.stringify(meta), { ex: 604800 }); } catch { /* non-fatal */ }
-  }
-
-  res.setHeader('Cache-Control', 'public, s-maxage=604800');
-  return res.json({ meta });
-}
-
 // ── Catalog ───────────────────────────────────────────────────
 
 async function handleCatalog(config, type, id, extra, res, uuid = null) {
@@ -765,13 +678,6 @@ export default async function handler(req, res) {
     }
   }
 
-  if (resource === 'meta') {
-    try {
-      return await handleMeta(config, type, id, res);
-    } catch {
-      return res.json({ meta: null });
-    }
-  }
 
   return res.status(404).json({ error: 'Not found' });
 }
