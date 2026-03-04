@@ -615,85 +615,64 @@ async function handleCatalog(config, type, id, extra, res, uuid = null) {
   let traktData;
   let itemType = type;
 
-  switch (id) {
+switch (id) {
     case 'trakt-watchlist': {
-      const raw = await traktFetch(
-        `${TRAKT_BASE}/sync/watchlist/movies?sort=added&limit=20&page=${page}, headers
-      );
+      const raw = await traktFetch(`${TRAKT_BASE}/sync/watchlist/movies?sort=added&limit=20&page=${page}`, headers);
       traktData = raw.map(item => item.movie);
       break;
     }
     case 'trakt-trending': {
-      const raw = await traktFetch(
-        `${TRAKT_BASE}/movies/trending?limit=20&page=${page}, headers
-      );
+      const raw = await traktFetch(`${TRAKT_BASE}/movies/trending?limit=20&page=${page}`, headers);
       traktData = raw.map(item => item.movie);
       break;
     }
     case 'trakt-popular': {
-      traktData = await traktFetch(
-        `${TRAKT_BASE}/movies/popular?limit=20&page=${page}, headers
-      );
+      traktData = await traktFetch(`${TRAKT_BASE}/movies/popular?limit=20&page=${page}`, headers);
       break;
     }
     case 'trakt-anticipated': {
-      const raw = await traktFetch(
-        `${TRAKT_BASE}/movies/anticipated?limit=20&page=${page}, headers
-      );
+      const raw = await traktFetch(`${TRAKT_BASE}/movies/anticipated?limit=20&page=${page}`, headers);
       traktData = raw.map(item => item.movie);
       break;
     }
     case 'trakt-boxoffice': {
-      const raw = await traktFetch(
-        `${TRAKT_BASE}/movies/boxoffice?, headers
-      );
+      const raw = await traktFetch(`${TRAKT_BASE}/movies/boxoffice`, headers);
       traktData = raw.map(item => item.movie);
       break;
     }
     case 'trakt-recommended': {
-      traktData = await traktFetch(
-        `${TRAKT_BASE}/recommendations/movies?limit=20, headers
-      );
+      traktData = await traktFetch(`${TRAKT_BASE}/recommendations/movies?limit=20`, headers);
       break;
     }
     case 'trakt-watchlist-shows': {
-      const raw = await traktFetch(
-        `${TRAKT_BASE}/sync/watchlist/shows?sort=added&limit=20&page=${page}, headers
-      );
+      const raw = await traktFetch(`${TRAKT_BASE}/sync/watchlist/shows?sort=added&limit=20&page=${page}`, headers);
       traktData = raw.map(item => item.show);
       itemType = 'series';
       break;
     }
     case 'trakt-trending-shows': {
-      const raw = await traktFetch(
-        `${TRAKT_BASE}/shows/trending?limit=20&page=${page}, headers
-      );
+      const raw = await traktFetch(`${TRAKT_BASE}/shows/trending?limit=20&page=${page}`, headers);
       traktData = raw.map(item => item.show);
       itemType = 'series';
       break;
     }
     case 'trakt-popular-shows': {
-      traktData = await traktFetch(
-        `${TRAKT_BASE}/shows/popular?limit=20&page=${page}, headers
-      );
+      traktData = await traktFetch(`${TRAKT_BASE}/shows/popular?limit=20&page=${page}`, headers);
       itemType = 'series';
       break;
     }
     case 'trakt-anticipated-shows': {
-      const raw = await traktFetch(
-        `${TRAKT_BASE}/shows/anticipated?limit=20&page=${page}, headers
-      );
+      const raw = await traktFetch(`${TRAKT_BASE}/shows/anticipated?limit=20&page=${page}`, headers);
       traktData = raw.map(item => item.show);
       itemType = 'series';
       break;
     }
     case 'trakt-recommended-shows': {
-      traktData = await traktFetch(
-        `${TRAKT_BASE}/recommendations/shows?limit=20&, headers
-      );
+      traktData = await traktFetch(`${TRAKT_BASE}/recommendations/shows?limit=20`, headers);
       itemType = 'series';
       break;
     }
+    // ... keep your default case exactly as it is ...
     default: {
       if (id.startsWith('trakt-list-')) {
         const suffix = id.replace(/^trakt-list-/, '');
@@ -761,11 +740,6 @@ export default async function handler(req, res) {
   const { config, uuid } = await resolveConfig(configEncoded);
 
   if (resource === 'manifest') return handleManifest(config, res);
-
-  if (uuid) {
-    const limited = await checkRateLimit(uuid);
-    if (limited) return res.status(429).json({ error: 'Rate limit exceeded' });
-  }
 
   if (!config || !config.accessToken || (!config.clientId && !process.env.TRAKT_CLIENT_ID)) {
     if (resource === 'meta') return res.json({ meta: null });
