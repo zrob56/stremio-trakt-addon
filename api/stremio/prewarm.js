@@ -1,5 +1,5 @@
 import { Redis } from '@upstash/redis';
-import { resolveCacheNamespace } from './handler.js';
+import { fetchWithRetry, resolveCacheNamespace } from './handler.js';
 
 const TRAKT_BASE = 'https://api.trakt.tv';
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent';
@@ -37,7 +37,7 @@ function traktHeaders(clientId, accessToken) {
 }
 
 async function traktFetch(url, headers) {
-  const response = await fetch(url, { headers });
+  const response = await fetchWithRetry(url, { headers });
   if (!response.ok) throw new Error(`Trakt API error: ${response.status}`);
   return response.json();
 }
@@ -105,7 +105,7 @@ async function generateCatalog(config, mediaType, genreKey) {
     ? `You are a hidden gems ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 40 underrated, obscure, or cult classic ${mediaLabel} matching the user's taste — NOT mainstream blockbusters, franchises, or well-known Oscar winners. Do not recommend anything from the lists above.${customClause}\nReturn ONLY a valid JSON array of 40 objects with title and year, no other text:\n[{"title": "Movie Name", "year": 2023}, ...]`
     : `You are a ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 40 ${mediaLabel}${genreClause} matching the user's taste. Do not recommend anything from the lists above.${customClause}\nReturn ONLY a valid JSON array of 40 objects with title and year, no other text:\n[{"title": "Movie Name", "year": 2023}, ...]`;
 
-  const geminiRes = await fetch(`${GEMINI_BASE}?key=${config.geminiKey}`, {
+  const geminiRes = await fetchWithRetry(`${GEMINI_BASE}?key=${config.geminiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -128,7 +128,7 @@ async function generateCatalog(config, mediaType, genreKey) {
   const items = parsed.filter(item => item && typeof item.title === 'string' && item.year);
   const resolved = await mapConcurrent(items, 5, async item => {
     try {
-      const r = await fetch(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&limit=5`, { headers });
+      const r = await fetchWithRetry(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&limit=5`, { headers });
       if (!r.ok) return null;
       const data = await r.json();
       if (!data?.length) return null;

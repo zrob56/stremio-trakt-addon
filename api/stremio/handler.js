@@ -1,6 +1,10 @@
 import { Redis } from '@upstash/redis';
 
 export const TRAKT_BASE = 'https://api.trakt.tv';
+const RETRY_MAX_ATTEMPTS = 2;
+const RETRY_MIN_DELAY_MS = 250;
+const RETRY_MAX_DELAY_MS = 400;
+const RETRY_AFTER_CAP_MS = 2000;
 
 class TraktAuthError extends Error {
   constructor(msg) { super(msg); this.name = 'TraktAuthError'; }
@@ -29,6 +33,51 @@ async function resolveConfig(encoded) {
   } catch {
     return { config: null, uuid: null };
   }
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function parseRetryAfterMs(response) {
+  const retryAfter = response.headers.get('retry-after');
+  if (!retryAfter) return null;
+  const seconds = Number(retryAfter);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(seconds * 1000, RETRY_AFTER_CAP_MS);
+  }
+  const dateMs = Date.parse(retryAfter);
+  if (!Number.isFinite(dateMs)) return null;
+  const delta = Math.max(0, dateMs - Date.now());
+  return Math.min(delta, RETRY_AFTER_CAP_MS);
+}
+
+function randomRetryDelayMs() {
+  return RETRY_MIN_DELAY_MS + Math.floor(Math.random() * (RETRY_MAX_DELAY_MS - RETRY_MIN_DELAY_MS + 1));
+}
+
+function isRetryableStatus(status) {
+  return status === 429 || status >= 500;
+}
+
+export async function fetchWithRetry(url, init = {}) {
+  let lastError;
+  for (let attempt = 1; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
+    try {
+      const response = await fetch(url, init);
+      if (attempt < RETRY_MAX_ATTEMPTS && isRetryableStatus(response.status)) {
+        const delayMs = parseRetryAfterMs(response) ?? randomRetryDelayMs();
+        await sleep(delayMs);
+        continue;
+      }
+      return response;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= RETRY_MAX_ATTEMPTS) throw error;
+      await sleep(randomRetryDelayMs());
+    }
+  }
+  throw lastError || new Error('Request failed');
 }
 
 export function resolveCacheNamespace(config, uuid) {
@@ -89,7 +138,7 @@ export function traktHeaders(clientId, accessToken) {
 }
 
 export async function traktFetch(url, headers) {
-  const response = await fetch(url, { headers });
+  const response = await fetchWithRetry(url, { headers });
   if (response.status === 401) throw new TraktAuthError('Token expired');
   if (!response.ok) throw new Error(`Trakt API error: ${response.status}`);
   return response.json();
@@ -296,7 +345,7 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
 
   const prompt = `You are a ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 40 ${mediaLabel} for EACH of the following categories. Do not recommend anything from the lists above.${customClause}\n\nCategories and their rules:\n${categoryRules}\n\nReturn ONLY a valid JSON object where each key is a category and the value is an array of 40 objects with title and year. No other text:\n{"overall": [{"title": "...", "year": 2023}, ...], ...}`;
 
-  const geminiRes = await fetch(`${GEMINI_CATALOG_BASE}?key=${config.geminiKey}`, {
+  const geminiRes = await fetchWithRetry(`${GEMINI_CATALOG_BASE}?key=${config.geminiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -326,7 +375,7 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
     const validItems = items.filter(item => item && typeof item.title === 'string' && item.year);
     const resolved = await mapConcurrent(validItems, 5, async item => {
       try {
-        const r = await fetch(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&limit=5`, { headers });
+        const r = await fetchWithRetry(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&limit=5`, { headers });
         if (!r.ok) return null;
         const data = await r.json();
         if (!data?.length) return null;
@@ -418,7 +467,7 @@ async function resolveImdbIds(items, traktType, headers) {
   const validItems = items.filter(item => item && typeof item.title === 'string' && item.year);
   const resolved = await mapConcurrent(validItems, 5, async item => {
     try {
-      const r = await fetch(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&limit=5`, { headers });
+      const r = await fetchWithRetry(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&limit=5`, { headers });
       if (!r.ok) return null;
       const data = await r.json();
       if (!data?.length) return null;
@@ -464,9 +513,9 @@ async function handleAISearch(config, mediaType, query, res, cacheNamespace = nu
 
   // Run exact Trakt title search + Gemini call concurrently
   const [exactMovieData, exactShowData, geminiRes] = await Promise.all([
-    fetch(`${TRAKT_BASE}/search/movie?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
-    fetch(`${TRAKT_BASE}/search/show?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
-    fetch(`${GEMINI_SEARCH_BASE}?key=${config.geminiKey}`, {
+    fetchWithRetry(`${TRAKT_BASE}/search/movie?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
+    fetchWithRetry(`${TRAKT_BASE}/search/show?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
+    fetchWithRetry(`${GEMINI_SEARCH_BASE}?key=${config.geminiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7, responseMimeType: 'application/json' } }),
