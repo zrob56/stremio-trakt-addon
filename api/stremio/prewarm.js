@@ -1,4 +1,5 @@
 import { Redis } from '@upstash/redis';
+import { resolveCacheNamespace } from './handler.js';
 
 const TRAKT_BASE = 'https://api.trakt.tv';
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent';
@@ -192,7 +193,11 @@ export default async function handler(req, res) {
     return res.json({ status: 'skipped', reason: 'no geminiKey' });
   }
 
-  const cacheKey = `ai:${uuid}:ai-${type}-${genre}`;
+  const cacheNamespace = resolveCacheNamespace(config, uuid);
+  if (!cacheNamespace) {
+    return res.status(400).json({ error: 'Invalid cache namespace' });
+  }
+  const cacheKey = `ai:${cacheNamespace}:ai-${type}-${genre}`;
 
   // Return immediately if already cached
   try {

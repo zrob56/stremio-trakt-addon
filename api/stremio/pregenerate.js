@@ -1,5 +1,5 @@
 import { Redis } from '@upstash/redis';
-import { generateAndCacheAllGenres } from './handler.js';
+import { generateAndCacheAllGenres, resolveCacheNamespace } from './handler.js';
 
 const AI_CATALOG_TTL = 2592000; // 30 days
 const BUDGET_MS = 270000;      // stop generating after 4.5min (30s margin before 5min cron timeout)
@@ -81,6 +81,8 @@ export default async function handler(req, res) {
     } catch { continue; }
 
     if (!config.geminiKey) continue;
+    const cacheNamespace = resolveCacheNamespace(config, uuid);
+    if (!cacheNamespace) continue;
 
     const aiCatalogs = (config.enabledCatalogs || []).filter(isAiCatalog);
     if (aiCatalogs.length === 0) continue;
@@ -92,13 +94,13 @@ export default async function handler(req, res) {
     let movieStale = false;
     for (const catalogId of movieCatalogs) {
       const { rawType, genre } = parseCatalogId(catalogId);
-      if (await isStale(redis, `ai:${uuid}:ai-${rawType}-${genre}`)) { movieStale = true; break; }
+      if (await isStale(redis, `ai:${cacheNamespace}:ai-${rawType}-${genre}`)) { movieStale = true; break; }
     }
 
     let showStale = false;
     for (const catalogId of showCatalogs) {
       const { rawType, genre } = parseCatalogId(catalogId);
-      if (await isStale(redis, `ai:${uuid}:ai-${rawType}-${genre}`)) { showStale = true; break; }
+      if (await isStale(redis, `ai:${cacheNamespace}:ai-${rawType}-${genre}`)) { showStale = true; break; }
     }
 
     if (!movieStale) skipped += movieCatalogs.length;
@@ -106,7 +108,7 @@ export default async function handler(req, res) {
 
     if (movieStale && movieCatalogs.length > 0) {
       try {
-        await generateAndCacheAllGenres('movie', config, redis, uuid);
+        await generateAndCacheAllGenres('movie', config, redis, cacheNamespace);
         processed += movieCatalogs.length;
       } catch (err) {
         console.error(`pregenerate movie error ${uuid}:`, err.message);
@@ -117,7 +119,7 @@ export default async function handler(req, res) {
 
     if (showStale && showCatalogs.length > 0) {
       try {
-        await generateAndCacheAllGenres('series', config, redis, uuid);
+        await generateAndCacheAllGenres('series', config, redis, cacheNamespace);
         processed += showCatalogs.length;
       } catch (err) {
         console.error(`pregenerate show error ${uuid}:`, err.message);

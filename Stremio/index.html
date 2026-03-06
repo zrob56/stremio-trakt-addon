@@ -854,7 +854,7 @@
         }
 
         // ─── Step 4: Install ────────────────────────────────────────
-        function StepInstall({ clientId, clientSecret, geminiKey, tokens, enabledCatalogs, setEnabledCatalogs, onBack, onManage, uuid, onUuidSet, traktLists = [], traktListsLoading = false }) {
+        function StepInstall({ clientId, clientSecret, geminiKey, tokens, enabledCatalogs, setEnabledCatalogs, onBack, onManage, uuid, manageKey, onUuidSet, traktLists = [], traktListsLoading = false }) {
             const [copied, setCopied] = useState(false);
             const [toast, setToast] = useState(null);
             const [installUuid, setInstallUuid] = useState(uuid || null);
@@ -890,9 +890,9 @@
                             }),
                         });
                         if (res.ok) {
-                            const { uuid: newUuid } = await res.json();
+                            const { uuid: newUuid, manageKey: newManageKey } = await res.json();
                             setInstallUuid(newUuid);
-                            onUuidSet?.(newUuid);
+                            onUuidSet?.(newUuid, newManageKey || null);
                             clearCache(newUuid);
                         } else {
                             setToast({ message: 'Could not generate a stable URL — using a temporary link instead. Check Vercel env vars.', type: 'error' });
@@ -1195,7 +1195,7 @@
         }
 
         // ─── Watchlist Tab ───────────────────────────────────────────
-        function WatchlistTab({ clientId, tokens, uuid }) {
+        function WatchlistTab({ clientId, tokens, uuid, manageKey }) {
             const [movies, setMovies] = useState(null);
             const [shows, setShows] = useState(null);
             const [mediaTab, setMediaTab] = useState('movies');
@@ -1225,7 +1225,8 @@
             const removeItem = useCallback(async (imdbId, type) => {
                 setRemoving(prev => new Set([...prev, imdbId]));
                 try {
-                    const url = `/api/stremio/action?a=unwatchlist&type=${type}&id=${imdbId}&uuid=${uuid}`;
+                    const keyPart = manageKey ? `&k=${encodeURIComponent(manageKey)}` : '';
+                    const url = `/api/stremio/action?a=unwatchlist&type=${type}&id=${imdbId}&uuid=${uuid}${keyPart}`;
                     const r = await fetch(url);
                     if (r.ok) {
                         if (type === 'movie') setMovies(prev => prev.filter(i => i.movie.ids.imdb !== imdbId));
@@ -1239,7 +1240,7 @@
                 } finally {
                     setRemoving(prev => { const n = new Set(prev); n.delete(imdbId); return n; });
                 }
-            }, [uuid]);
+            }, [uuid, manageKey]);
 
             const loading = movies === null || shows === null;
             const items = mediaTab === 'movies'
@@ -1293,7 +1294,7 @@
         }
 
         // ─── Step 5: Manage ─────────────────────────────────────────
-        function StepManage({ clientId, clientSecret, geminiKey: initialGeminiKey, initialCustomInstructions, tokens, enabledCatalogs, onCatalogsChange, onReauth, onBack, uuid, onUuidSet, traktLists = [], traktListsLoading = false }) {
+        function StepManage({ clientId, clientSecret, geminiKey: initialGeminiKey, initialCustomInstructions, tokens, enabledCatalogs, onCatalogsChange, onReauth, onBack, uuid, manageKey, onUuidSet, traktLists = [], traktListsLoading = false }) {
             const [activeTab, setActiveTab] = useState('catalogs');
             const [copied, setCopied] = useState(false);
             const [toast, setToast] = useState(null);
@@ -1378,8 +1379,8 @@
                             }),
                         });
                         if (r.ok) {
-                            const { uuid: newUuid } = await r.json();
-                            onUuidSet?.(newUuid);
+                            const { uuid: newUuid, manageKey: newManageKey } = await r.json();
+                            onUuidSet?.(newUuid, newManageKey || null);
                         }
                     } catch { /* non-fatal */ }
                 })();
@@ -1616,7 +1617,7 @@
                         <SearchTab clientId={clientId} tokens={tokens} />
                     )}
                     {activeTab === 'watchlist' && (
-                        <WatchlistTab clientId={clientId} tokens={tokens} uuid={uuid} />
+                        <WatchlistTab clientId={clientId} tokens={tokens} uuid={uuid} manageKey={manageKey} />
                     )}
                     {activeTab === 'catalogs' && (
                         <div className="space-y-6">
@@ -1726,6 +1727,9 @@
             const [uuid, setUuid] = useState(() => {
                 try { return localStorage.getItem('trakt_uuid') || null; } catch { return null; }
             });
+            const [manageKey, setManageKey] = useState(() => {
+                try { return localStorage.getItem('trakt_manage_key') || null; } catch { return null; }
+            });
             const [sharedApp, setSharedApp] = useState(false);
             const [traktLists, setTraktLists] = useState([]);
             const [traktListsLoading, setTraktListsLoading] = useState(false);
@@ -1747,9 +1751,13 @@
                     .finally(() => setTraktListsLoading(false));
             }, [tokens?.accessToken, uuid]);
 
-            const handleUuidSet = useCallback((newUuid) => {
+            const handleUuidSet = useCallback((newUuid, newManageKey = null) => {
                 setUuid(newUuid);
                 try { localStorage.setItem('trakt_uuid', newUuid); } catch {}
+                if (newManageKey) {
+                    setManageKey(newManageKey);
+                    try { localStorage.setItem('trakt_manage_key', newManageKey); } catch {}
+                }
             }, []);
 
             // Load saved config from localStorage on mount
@@ -1793,15 +1801,17 @@
 
             const handleReauth = useCallback(() => {
                 if (uuid) {
-                    fetch(`/api/stremio/install?uuid=${uuid}`, { method: 'DELETE' }).catch(() => {});
+                    const keyPart = manageKey ? `&k=${encodeURIComponent(manageKey)}` : '';
+                    fetch(`/api/stremio/install?uuid=${uuid}${keyPart}`, { method: 'DELETE' }).catch(() => {});
                 }
-                try { localStorage.removeItem('trakt_config'); localStorage.removeItem('trakt_uuid'); } catch {}
+                try { localStorage.removeItem('trakt_config'); localStorage.removeItem('trakt_uuid'); localStorage.removeItem('trakt_manage_key'); } catch {}
                 setTokens(null);
                 setClientId('');
                 setClientSecret('');
                 setUuid(null);
+                setManageKey(null);
                 setStep(1);
-            }, []);
+            }, [uuid, manageKey]);
 
             if (step === 5 && tokens) {
                 return (
@@ -1818,6 +1828,7 @@
                                 onReauth={handleReauth}
                                 onBack={() => setStep(4)}
                                 uuid={uuid}
+                                manageKey={manageKey}
                                 onUuidSet={handleUuidSet}
                                 traktLists={traktLists}
                                 traktListsLoading={traktListsLoading}
@@ -1880,6 +1891,7 @@
                                 onBack={() => setStep(3)}
                                 onManage={() => setStep(5)}
                                 uuid={uuid}
+                                manageKey={manageKey}
                                 onUuidSet={handleUuidSet}
                                 traktLists={traktLists}
                                 traktListsLoading={traktListsLoading}

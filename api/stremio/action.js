@@ -139,6 +139,7 @@ export default async function handler(req, res) {
   const type = url.searchParams.get('type') || 'movie';
   const imdbId = url.searchParams.get('id');
   const uuid = url.searchParams.get('uuid');
+  const providedManageKey = url.searchParams.get('k');
 
   if (!uuid || !UUID_REGEX.test(uuid)) {
     return res.status(400).send(htmlPage('Configuration Error', '⚠️', 'Invalid or missing addon configuration.', '#ef4444'));
@@ -157,6 +158,9 @@ export default async function handler(req, res) {
   }
   if (!config.accessToken || (!config.clientId && !process.env.TRAKT_CLIENT_ID)) {
     return res.status(400).send(htmlPage('Configuration Error', '⚠️', 'Invalid or missing addon configuration.', '#ef4444'));
+  }
+  if (config?.manageKey && providedManageKey !== config.manageKey) {
+    return res.status(403).send(htmlPage('Forbidden', '🔒', 'Invalid management key.', '#ef4444'));
   }
 
   if (!imdbId) {

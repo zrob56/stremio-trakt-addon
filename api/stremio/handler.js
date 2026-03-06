@@ -31,6 +31,10 @@ async function resolveConfig(encoded) {
   }
 }
 
+export function resolveCacheNamespace(config, uuid) {
+  return config?.traktUsername || uuid || null;
+}
+
 async function saveRefreshedConfig(uuid, newConfig) {
   if (!uuid) return;
   try {
@@ -261,7 +265,7 @@ async function fetchTraktHistory(config, isShow) {
 // Make ONE Gemini call covering ALL genre keys for the given media type.
 // Parses the JSON object response, resolves IMDB IDs for each genre, writes
 // each genre to its own cache key, and returns a { genre: imdbIds[] } map.
-export async function generateAndCacheAllGenres(mediaType, config, redis, uuid) {
+export async function generateAndCacheAllGenres(mediaType, config, redis, cacheNamespace) {
   const isShow = mediaType === 'series';
   const weekNum = Math.floor(Date.now() / (7 * 24 * 60 * 60 * 1000));
   const temperature = [0.7, 0.8, 0.9, 1.0][weekNum % 4];
@@ -339,8 +343,8 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, uuid) 
     });
     const imdbIds = resolved.filter(id => id && /^tt\d+$/.test(id));
     result[genre] = imdbIds;
-    if (redis && uuid && imdbIds.length > 0) {
-      const cacheKey = `ai:${uuid}:ai-${rawType}-${genre}`;
+    if (redis && cacheNamespace && imdbIds.length > 0) {
+      const cacheKey = `ai:${cacheNamespace}:ai-${rawType}-${genre}`;
       try { await redis.set(cacheKey, JSON.stringify(imdbIds), { ex: 2592000 }); } catch { /* non-fatal */ }
     }
   }
@@ -353,9 +357,9 @@ function rpdbPoster(imdbId) {
   return `https://api.ratingposterdb.com/${RPDB_FREE_KEY}/imdb/poster-default/${imdbId}.jpg`;
 }
 
-async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = null) {
-  const redis = uuid ? getRedis() : null;
-  const cacheKey = uuid ? `ai:${uuid}:ai-${mediaType === 'series' ? 'show' : 'movie'}-${genreKey}` : null;
+async function handleAICatalog(config, mediaType, genreKey, skip, res, cacheNamespace = null) {
+  const redis = cacheNamespace ? getRedis() : null;
+  const cacheKey = cacheNamespace ? `ai:${cacheNamespace}:ai-${mediaType === 'series' ? 'show' : 'movie'}-${genreKey}` : null;
   if (redis && cacheKey) {
     try {
       const cached = await redis.get(cacheKey);
@@ -376,8 +380,8 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
 
   // Redis lock: only one request per user+mediaType triggers Gemini generation.
   // All other parallel requests return empty immediately; Stremio retries automatically.
-  const lockKey = redis && uuid
-    ? `ai-lock:${uuid}:${mediaType === 'series' ? 'show' : 'movie'}`
+  const lockKey = redis && cacheNamespace
+    ? `ai-lock:${cacheNamespace}:${mediaType === 'series' ? 'show' : 'movie'}`
     : null;
   let lockAcquired = false;
   if (lockKey) {
@@ -392,7 +396,7 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, uuid = nu
 
   try {
     // Batched call: one Gemini request warms all genre keys for this media type at once
-    const allResults = await generateAndCacheAllGenres(mediaType, config, redis, uuid);
+    const allResults = await generateAndCacheAllGenres(mediaType, config, redis, cacheNamespace);
     const imdbIds = allResults?.[genreKey] ?? [];
     res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
     return res.json({ metas: imdbIds.slice(0, 40).map(id => ({ id, type: mediaType, poster: rpdbPoster(id) })) });
@@ -432,11 +436,11 @@ async function resolveImdbIds(items, traktType, headers) {
   return resolved.filter(id => id && /^tt\d+$/.test(id));
 }
 
-async function handleAISearch(config, mediaType, query, res, uuid = null) {
+async function handleAISearch(config, mediaType, query, res, cacheNamespace = null) {
   if (!query?.trim()) return res.json({ metas: [] });
 
-  const redis = uuid ? getRedis() : null;
-  const cacheKey = uuid ? `ai-search:${uuid}:${query.trim().toLowerCase()}` : null;
+  const redis = cacheNamespace ? getRedis() : null;
+  const cacheKey = cacheNamespace ? `ai-search:${cacheNamespace}:${query.trim().toLowerCase()}` : null;
 
   // Check cache — new format is { movie: [...], series: [...] }
   if (redis && cacheKey) {
@@ -602,14 +606,14 @@ switch (id) {
         break;
       }
       if (id.startsWith('ai-') && config.geminiKey) {
-        const cacheId = config.traktUsername || uuid;
-        if (id === 'ai-search-movie')  return handleAISearch(config, 'movie',  params.search, res, cacheId);
-        if (id === 'ai-search-series') return handleAISearch(config, 'series', params.search, res, cacheId);
+        const cacheNamespace = resolveCacheNamespace(config, uuid);
+        if (id === 'ai-search-movie')  return handleAISearch(config, 'movie',  params.search, res, cacheNamespace);
+        if (id === 'ai-search-series') return handleAISearch(config, 'series', params.search, res, cacheNamespace);
         const parts = id.split('-');
         const aiMediaType = parts[1] === 'show' ? 'series' : parts[1];
         const genreKey = parts[2] || 'overall';
         const skip = parseInt(params.skip) || 0;
-        return await handleAICatalog(config, aiMediaType, genreKey, skip, res, cacheId);
+        return await handleAICatalog(config, aiMediaType, genreKey, skip, res, cacheNamespace);
       }
       return res.json({ metas: [] });
     }

@@ -15,6 +15,10 @@ function getRedis() {
   return new Redis({ url: process.env.KV_REST_API_URL, token: process.env.KV_REST_API_TOKEN });
 }
 
+function createManageKey() {
+  return `${crypto.randomUUID().replace(/-/g, '')}${crypto.randomUUID().replace(/-/g, '')}`;
+}
+
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     setCors(res);
@@ -43,11 +47,24 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'DELETE') {
-    const uuid = new URL(req.url, `http://${req.headers.host}`).searchParams.get('uuid');
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const uuid = url.searchParams.get('uuid');
+    const providedManageKey = url.searchParams.get('k');
     if (!uuid || !UUID_REGEX.test(uuid)) return res.status(400).json({ error: 'Invalid uuid' });
     let redis;
     try { redis = getRedis(); } catch {
       return res.status(503).json({ error: 'Storage not configured' });
+    }
+    let cfg = null;
+    try {
+      const raw = await redis.get(`user:${uuid}`);
+      if (!raw) return res.status(404).json({ error: 'Not found' });
+      cfg = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    } catch {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    if (cfg?.manageKey && providedManageKey !== cfg.manageKey) {
+      return res.status(403).json({ error: 'Invalid management key' });
     }
     await redis.del(`user:${uuid}`);
     return res.status(200).json({ deleted: true });
@@ -67,12 +84,23 @@ export default async function handler(req, res) {
   if ((!clientId && !process.env.TRAKT_CLIENT_ID) || !accessToken || !refreshToken) {
     return res.status(400).json({ error: 'Missing required fields: accessToken, refreshToken (and clientId if no shared app configured)' });
   }
+  if (existingUuid && !UUID_REGEX.test(existingUuid)) {
+    return res.status(400).json({ error: 'Invalid uuid' });
+  }
 
   let redis;
   try {
     redis = getRedis();
   } catch {
     return res.status(503).json({ error: 'Storage not configured. Set KV_REST_API_URL and KV_REST_API_TOKEN env vars.' });
+  }
+
+  let existingConfig = null;
+  if (existingUuid) {
+    try {
+      const rawExisting = await redis.get(`user:${existingUuid}`);
+      if (rawExisting) existingConfig = typeof rawExisting === 'string' ? JSON.parse(rawExisting) : rawExisting;
+    } catch { /* non-fatal */ }
   }
 
   const config = {
@@ -84,6 +112,7 @@ export default async function handler(req, res) {
     enabledCatalogs: enabledCatalogs || [],
     ...(customInstructions?.trim() ? { customInstructions: customInstructions.trim() } : {}),
     ...(excludedFromFeed?.length ? { excludedFromFeed } : {}),
+    manageKey: existingConfig?.manageKey || createManageKey(),
   };
 
   // Fetch Trakt username to use as shared cache namespace across installs
@@ -101,6 +130,9 @@ export default async function handler(req, res) {
       if (me?.username) config.traktUsername = me.username;
     }
   } catch { /* non-fatal */ }
+  if (!config.traktUsername && existingConfig?.traktUsername) {
+    config.traktUsername = existingConfig.traktUsername;
+  }
 
   // Re-use existing UUID (update) or generate a new one
   const uuid = existingUuid || crypto.randomUUID();
@@ -108,5 +140,5 @@ export default async function handler(req, res) {
   // 35-day sliding TTL — reset on every valid request; orphaned UUIDs expire automatically
   await redis.set(`user:${uuid}`, JSON.stringify(config), { ex: 3024000 });
 
-  return res.json({ uuid });
+  return res.json({ uuid, manageKey: config.manageKey });
 }
