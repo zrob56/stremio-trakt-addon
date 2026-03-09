@@ -2,7 +2,7 @@ import { Redis } from '@upstash/redis';
 import { fetchWithRetry, resolveCacheNamespace } from './handler.js';
 
 const TRAKT_BASE = 'https://api.trakt.tv';
-const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent';
+const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

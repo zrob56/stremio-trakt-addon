@@ -265,7 +265,7 @@ function handleManifest(config, res) {
 // ── AI Catalog ────────────────────────────────────────────────
 
 // Smart model for background catalog generation
-const GEMINI_CATALOG_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent';
+const GEMINI_CATALOG_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
 // Ultra-fast model for real-time search
 const GEMINI_SEARCH_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent';
