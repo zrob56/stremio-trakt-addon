@@ -269,7 +269,7 @@ function handleManifest(config, res) {
 const GEMINI_CATALOG_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
 // Ultra-fast model for real-time search
-const GEMINI_SEARCH_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent';
+const GEMINI_SEARCH_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent';
 
 // Fetch Trakt history for the given media type and return formatted lists.
 async function fetchTraktHistory(config, isShow) {
@@ -517,7 +517,8 @@ async function handleAISearch(config, mediaType, query, res, cacheNamespace = nu
   if (!query?.trim()) return res.json({ metas: [] });
 
   const redis = cacheNamespace ? getRedis() : null;
-  const cacheKey = cacheNamespace ? `ai-search:${cacheNamespace}:${query.trim().toLowerCase()}` : null;
+  const normalizedQuery = query.trim().toLowerCase().replace(/\s+/g, ' ');
+  const cacheKey = cacheNamespace ? `ai-search:${cacheNamespace}:${normalizedQuery}` : null;
 
   // Check cache — new format is { movie: [...], series: [...] }
   if (redis && cacheKey) {

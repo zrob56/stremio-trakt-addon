@@ -153,13 +153,55 @@
                 .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
         }
 
+        // ─── Gemini Key Validation ────────────────────────────────────
+        const GEMINI_VALIDATE_MODELS = [
+            { name: 'gemini-2.5-flash',    label: 'catalog' },
+            { name: 'gemini-2.0-flash-lite', label: 'search'  },
+        ];
+
+        async function validateGeminiKey(key) {
+            const body = JSON.stringify({
+                contents: [{ parts: [{ text: 'ok' }] }],
+                generationConfig: { maxOutputTokens: 1 }
+            });
+            const results = await Promise.all(
+                GEMINI_VALIDATE_MODELS.map(async ({ name, label }) => {
+                    try {
+                        const res = await fetch(
+                            `https://generativelanguage.googleapis.com/v1beta/models/${name}:generateContent?key=${key}`,
+                            { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }
+                        );
+                        return { label, ok: res.ok, status: res.status };
+                    } catch { return { label, ok: false, status: 0 }; }
+                })
+            );
+            const badKey = results.some(r => r.status === 401 || r.status === 403);
+            const brokenModels = results.filter(r => r.status === 404).map(r => r.label);
+            const allOk = results.every(r => r.ok);
+            return { allOk, badKey, brokenModels };
+        }
+
         // ─── Step 1: Client ID & Secret ───────────────────────────────
         function StepClientId({ onNext, sharedApp }) {
             const [clientId, setClientId] = useState('');
             const [clientSecret, setClientSecret] = useState('');
             const [geminiKey, setGeminiKey] = useState('');
+            const [geminiKeyStatus, setGeminiKeyStatus] = useState(null); // null|'checking'|'valid'|'invalid'|'model-error'
 
             const canContinue = sharedApp ? true : (clientId.trim() && clientSecret.trim());
+
+            const handleGeminiBlur = async () => {
+                const key = geminiKey.trim();
+                if (!key) return;
+                setGeminiKeyStatus('checking');
+                try {
+                    const { allOk, badKey, brokenModels } = await validateGeminiKey(key);
+                    if (badKey) setGeminiKeyStatus('invalid');
+                    else if (brokenModels.length > 0) setGeminiKeyStatus('model-error');
+                    else if (allOk) setGeminiKeyStatus('valid');
+                    else setGeminiKeyStatus('invalid');
+                } catch { setGeminiKeyStatus(null); }
+            };
 
             return (
                 <div className="animate-fade-in space-y-6">
@@ -212,12 +254,19 @@
                             <input
                                 type="password"
                                 value={geminiKey}
-                                onChange={e => setGeminiKey(e.target.value)}
+                                onChange={e => { setGeminiKey(e.target.value); setGeminiKeyStatus(null); }}
+                                onBlur={handleGeminiBlur}
                                 placeholder="Paste your Gemini API key..."
                                 className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-4 py-3 text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-trakt-500 focus:ring-1 focus:ring-trakt-500/30 transition font-mono"
                                 onKeyDown={e => e.key === 'Enter' && canContinue && onNext(clientId.trim(), clientSecret.trim(), geminiKey.trim())}
                             />
-                            <p className="text-xs text-neutral-500 mt-1">Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" className="text-trakt-400 hover:text-trakt-300 underline">aistudio.google.com</a></p>
+                            <div className="flex items-center justify-between mt-1">
+                                <p className="text-xs text-neutral-500">Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" className="text-trakt-400 hover:text-trakt-300 underline">aistudio.google.com</a></p>
+                                {geminiKeyStatus === 'checking' && <span className="text-xs text-neutral-400">Checking…</span>}
+                                {geminiKeyStatus === 'valid' && <span className="text-xs text-emerald-400">✓ Key valid</span>}
+                                {geminiKeyStatus === 'invalid' && <span className="text-xs text-red-400">✗ Invalid key</span>}
+                                {geminiKeyStatus === 'model-error' && <span className="text-xs text-amber-400">⚠ Key valid, search model issue</span>}
+                            </div>
                         </div>
 
                         <button
@@ -1412,15 +1461,35 @@
                 startPrewarm(uuid, aiCatalogs);
             }, [uuid]); // eslint-disable-line react-hooks/exhaustive-deps
 
-            const saveGeminiKey = useCallback(() => {
+            const saveGeminiKey = useCallback(async () => {
+                const key = geminiKey.trim();
+                if (key) {
+                    setToast({ message: 'Validating key…', type: 'info' });
+                    try {
+                        const { allOk, badKey, brokenModels } = await validateGeminiKey(key);
+                        if (badKey) {
+                            setToast({ message: 'Invalid Gemini key — check and try again', type: 'error' });
+                            return;
+                        }
+                        if (brokenModels.length > 0) {
+                            setToast({ message: 'Key saved — note: search model may be unavailable', type: 'success' });
+                        } else if (allOk) {
+                            setToast({ message: 'Gemini key saved — reinstall addon to activate AI Picks', type: 'success' });
+                        } else {
+                            setToast({ message: 'Key saved (validation inconclusive)', type: 'success' });
+                        }
+                    } catch {
+                        setToast({ message: 'Gemini key saved — reinstall addon to activate AI Picks', type: 'success' });
+                    }
+                }
                 try {
                     const saved = JSON.parse(localStorage.getItem('trakt_config') || '{}');
-                    saved.geminiKey = geminiKey.trim();
+                    saved.geminiKey = key;
                     localStorage.setItem('trakt_config', JSON.stringify(saved));
                     setGeminiSaved(true);
-                    setToast({ message: geminiKey.trim() ? 'Gemini key saved — reinstall addon to activate AI Picks' : 'Gemini key removed', type: 'success' });
+                    if (!key) setToast({ message: 'Gemini key removed', type: 'success' });
                     setTimeout(() => setGeminiSaved(false), 2000);
-                    pushToKV({ geminiKey: geminiKey.trim() || undefined });
+                    pushToKV({ geminiKey: key || undefined });
                 } catch {}
             }, [geminiKey, pushToKV]);
 
