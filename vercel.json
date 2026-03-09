@@ -1,5 +1,10 @@
 {
   "regions": ["sfo1"],
+  "functions": {
+    "api/stremio/pregenerate.js": {
+      "maxDuration": 60
+    }
+  },
   "crons": [
     {
       "path": "/api/stremio/pregenerate",

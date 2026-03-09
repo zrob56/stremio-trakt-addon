@@ -144,21 +144,37 @@ export async function traktFetch(url, headers) {
   return response.json();
 }
 
-async function refreshToken(config) {
-  const response = await fetch(`${TRAKT_BASE}/oauth/token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      refresh_token: config.refreshToken,
-      client_id: config.clientId || process.env.TRAKT_CLIENT_ID,
-      client_secret: config.clientSecret || process.env.TRAKT_CLIENT_SECRET || '',
-      redirect_uri: 'urn:ietf:wg:oauth:2.0:oob',
-      grant_type: 'refresh_token',
-    }),
-  });
-  if (!response.ok) return null;
-  const tokens = await response.json();
-  return { ...config, accessToken: tokens.access_token, refreshToken: tokens.refresh_token };
+async function refreshToken(config, uuid) {
+  const redis = getRedis();
+  const lockKey = uuid ? `refresh-lock:${uuid}` : null;
+
+  if (redis && lockKey) {
+    const acquired = await redis.set(lockKey, '1', { nx: true, ex: 10 });
+    if (!acquired) {
+      await new Promise(r => setTimeout(r, 2000));
+      const { config: newConfig } = await resolveConfig(uuid);
+      return newConfig;
+    }
+  }
+
+  try {
+    const response = await fetch(`${TRAKT_BASE}/oauth/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        refresh_token: config.refreshToken,
+        client_id: config.clientId || process.env.TRAKT_CLIENT_ID,
+        client_secret: config.clientSecret || process.env.TRAKT_CLIENT_SECRET || '',
+        redirect_uri: 'urn:ietf:wg:oauth:2.0:oob',
+        grant_type: 'refresh_token',
+      }),
+    });
+    if (!response.ok) return null;
+    const tokens = await response.json();
+    return { ...config, accessToken: tokens.access_token, refreshToken: tokens.refresh_token };
+  } finally {
+    if (redis && lockKey) await redis.del(lockKey).catch(() => {});
+  }
 }
 
 // ── Genre definitions ──────────────────────────────────────────
@@ -251,7 +267,7 @@ function handleManifest(config, res) {
 
   return res.json({
     id: 'com.zachr.trakt.recommendations',
-    version: '2.0.0',
+    version: '2.0.1',
     name: 'Trakt Recommendations',
     description: 'AI-powered movie & show recommendations by genre, powered by your Trakt history.',
     logo: 'https://www.cnet.com/a/img/resize/0e9874cc9d6b18489f832793796d285141496106/hub/2021/10/16/11804578-0dbc-42af-bcd1-3bc7b1394962/the-batman-2022-teaser-poster-batman-01-promo.jpg?auto=webp&fit=bounds&height=900&precrop=1881,1411,x423,y0&width=1200',
@@ -367,7 +383,6 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
 
   const traktType = isShow ? 'show' : 'movie';
   const rawType   = isShow ? 'show' : 'movie';
-  const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
   const result = {};
 
   for (const genre of genreKeys) {
@@ -380,10 +395,10 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
         if (!r.ok) return null;
         const data = await r.json();
         if (!data?.length) return null;
-        const q = norm(item.title);
+        const q = normTitle(item.title);
         const exact = data.find(d => {
           const t = d[traktType];
-          return t?.ids?.imdb && norm(t.title || '') === q && Math.abs((t.year || 0) - item.year) <= 1;
+          return t?.ids?.imdb && normTitle(t.title || '') === q && Math.abs((t.year || 0) - item.year) <= 1;
         });
         if (exact) {
           const t = exact[traktType];
@@ -433,6 +448,7 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, cacheName
           description: m.overview || undefined,
           imdbRating: m.rating ? m.rating.toFixed(1) : undefined,
           genres: m.genres || undefined,
+          behaviorHints: mediaType === 'movie' ? { defaultVideoId: m.id } : undefined,
         })) });
       }
     } catch { /* non-fatal */ }
@@ -471,6 +487,7 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, cacheName
       description: m.overview || undefined,
       imdbRating: m.rating ? m.rating.toFixed(1) : undefined,
       genres: m.genres || undefined,
+      behaviorHints: mediaType === 'movie' ? { defaultVideoId: m.id } : undefined,
     })) });
   } finally {
     if (lockKey && lockAcquired) {
@@ -494,10 +511,10 @@ async function resolveImdbIds(items, traktType, headers) {
       if (!r.ok) return null;
       const data = await r.json();
       if (!data?.length) return null;
-      const q = norm(item.title);
+      const q = normTitle(item.title);
       const exact = data.find(d => {
         const t = d[traktType];
-        return t?.ids?.imdb && norm(t.title || '') === q && Math.abs((t.year || 0) - item.year) <= 1;
+        return t?.ids?.imdb && normTitle(t.title || '') === q && Math.abs((t.year || 0) - item.year) <= 1;
       });
       if (exact) {
         const t = exact[traktType];
@@ -537,6 +554,7 @@ async function handleAISearch(config, mediaType, query, res, cacheNamespace = nu
             description: m.overview || undefined,
             imdbRating: m.rating ? m.rating.toFixed(1) : undefined,
             genres: m.genres || undefined,
+            behaviorHints: mediaType === 'movie' ? { defaultVideoId: m.id } : undefined,
           })) });
         }
       }
@@ -612,6 +630,7 @@ async function handleAISearch(config, mediaType, query, res, cacheNamespace = nu
     description: m.overview || undefined,
     imdbRating: m.rating ? m.rating.toFixed(1) : undefined,
     genres: m.genres || undefined,
+    behaviorHints: mediaType === 'movie' ? { defaultVideoId: m.id } : undefined,
   })) });
 }
 
@@ -627,58 +646,58 @@ async function handleCatalog(config, type, id, extra, res, uuid = null) {
 
 switch (id) {
     case 'trakt-watchlist': {
-      const raw = await traktFetch(`${TRAKT_BASE}/sync/watchlist/movies?sort=added&limit=20&page=${page}`, headers);
+      const raw = await traktFetch(`${TRAKT_BASE}/sync/watchlist/movies?sort=added&limit=20&page=${page}&extended=full`, headers);
       traktData = raw.map(item => item.movie);
       break;
     }
     case 'trakt-trending': {
-      const raw = await traktFetch(`${TRAKT_BASE}/movies/trending?limit=20&page=${page}`, headers);
+      const raw = await traktFetch(`${TRAKT_BASE}/movies/trending?limit=20&page=${page}&extended=full`, headers);
       traktData = raw.map(item => item.movie);
       break;
     }
     case 'trakt-popular': {
-      traktData = await traktFetch(`${TRAKT_BASE}/movies/popular?limit=20&page=${page}`, headers);
+      traktData = await traktFetch(`${TRAKT_BASE}/movies/popular?limit=20&page=${page}&extended=full`, headers);
       break;
     }
     case 'trakt-anticipated': {
-      const raw = await traktFetch(`${TRAKT_BASE}/movies/anticipated?limit=20&page=${page}`, headers);
+      const raw = await traktFetch(`${TRAKT_BASE}/movies/anticipated?limit=20&page=${page}&extended=full`, headers);
       traktData = raw.map(item => item.movie);
       break;
     }
     case 'trakt-boxoffice': {
-      const raw = await traktFetch(`${TRAKT_BASE}/movies/boxoffice`, headers);
+      const raw = await traktFetch(`${TRAKT_BASE}/movies/boxoffice?extended=full`, headers);
       traktData = raw.map(item => item.movie);
       break;
     }
     case 'trakt-recommended': {
-      traktData = await traktFetch(`${TRAKT_BASE}/recommendations/movies?limit=20`, headers);
+      traktData = await traktFetch(`${TRAKT_BASE}/recommendations/movies?limit=20&extended=full`, headers);
       break;
     }
     case 'trakt-watchlist-shows': {
-      const raw = await traktFetch(`${TRAKT_BASE}/sync/watchlist/shows?sort=added&limit=20&page=${page}`, headers);
+      const raw = await traktFetch(`${TRAKT_BASE}/sync/watchlist/shows?sort=added&limit=20&page=${page}&extended=full`, headers);
       traktData = raw.map(item => item.show);
       itemType = 'series';
       break;
     }
     case 'trakt-trending-shows': {
-      const raw = await traktFetch(`${TRAKT_BASE}/shows/trending?limit=20&page=${page}`, headers);
+      const raw = await traktFetch(`${TRAKT_BASE}/shows/trending?limit=20&page=${page}&extended=full`, headers);
       traktData = raw.map(item => item.show);
       itemType = 'series';
       break;
     }
     case 'trakt-popular-shows': {
-      traktData = await traktFetch(`${TRAKT_BASE}/shows/popular?limit=20&page=${page}`, headers);
+      traktData = await traktFetch(`${TRAKT_BASE}/shows/popular?limit=20&page=${page}&extended=full`, headers);
       itemType = 'series';
       break;
     }
     case 'trakt-anticipated-shows': {
-      const raw = await traktFetch(`${TRAKT_BASE}/shows/anticipated?limit=20&page=${page}`, headers);
+      const raw = await traktFetch(`${TRAKT_BASE}/shows/anticipated?limit=20&page=${page}&extended=full`, headers);
       traktData = raw.map(item => item.show);
       itemType = 'series';
       break;
     }
     case 'trakt-recommended-shows': {
-      traktData = await traktFetch(`${TRAKT_BASE}/recommendations/shows?limit=20`, headers);
+      traktData = await traktFetch(`${TRAKT_BASE}/recommendations/shows?limit=20&extended=full`, headers);
       itemType = 'series';
       break;
     }
@@ -724,6 +743,7 @@ switch (id) {
       description: item.overview || undefined,
       imdbRating: item.rating ? item.rating.toFixed(1) : undefined,
       genres: item.genres || undefined,
+      behaviorHints: itemType === 'movie' ? { defaultVideoId: item.ids.imdb } : undefined,
     }));
 
   res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
@@ -761,7 +781,7 @@ export default async function handler(req, res) {
       return await handleCatalog(config, type, id, extra, res, uuid);
     } catch (err) {
       if (err instanceof TraktAuthError && config.refreshToken) {
-        const newConfig = await refreshToken(config);
+        const newConfig = await refreshToken(config, uuid);
         if (newConfig) {
           // Persist the new tokens so subsequent requests don't loop on refresh
           await saveRefreshedConfig(uuid, newConfig);
