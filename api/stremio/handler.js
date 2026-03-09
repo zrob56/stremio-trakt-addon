@@ -257,6 +257,7 @@ function handleManifest(config, res) {
     logo: 'https://www.cnet.com/a/img/resize/0e9874cc9d6b18489f832793796d285141496106/hub/2021/10/16/11804578-0dbc-42af-bcd1-3bc7b1394962/the-batman-2022-teaser-poster-batman-01-promo.jpg?auto=webp&fit=bounds&height=900&precrop=1881,1411,x423,y0&width=1200',
     resources: ['catalog'],
     types: ['movie', 'series'],
+    idPrefixes: ['tt'],
     catalogs,
     behaviorHints: { configurable: true },
   });
@@ -419,7 +420,7 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, cacheName
           ? data.map(m => m.id).filter(Boolean)
           : data;
         const page = ids.slice(skip, skip + 40);
-        return res.json({ metas: page.map(id => ({ id, type: mediaType, poster: rpdbPoster(id) })) });
+        return res.json({ metas: page.map(id => ({ id, type: mediaType, name: mediaType === 'series' ? 'Show Pick' : 'Movie Pick', poster: rpdbPoster(id) })) });
       }
     } catch { /* non-fatal */ }
   }
@@ -448,7 +449,7 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, cacheName
     const allResults = await generateAndCacheAllGenres(mediaType, config, redis, cacheNamespace);
     const imdbIds = allResults?.[genreKey] ?? [];
     res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
-    return res.json({ metas: imdbIds.slice(0, 40).map(id => ({ id, type: mediaType, poster: rpdbPoster(id) })) });
+    return res.json({ metas: imdbIds.slice(0, 40).map(id => ({ id, type: mediaType, name: mediaType === 'series' ? 'Show Pick' : 'Movie Pick', poster: rpdbPoster(id) })) });
   } finally {
     if (lockKey && lockAcquired) {
       try { await redis.del(lockKey); } catch { /* non-fatal */ }
@@ -499,7 +500,7 @@ async function handleAISearch(config, mediaType, query, res, cacheNamespace = nu
         const data = typeof cached === 'string' ? JSON.parse(cached) : cached;
         if (data && typeof data === 'object' && !Array.isArray(data) && (data.movie || data.series)) {
           const ids = data[mediaType] || [];
-          return res.json({ metas: ids.map(id => ({ id, type: mediaType, poster: rpdbPoster(id) })) });
+          return res.json({ metas: ids.map(id => ({ id, type: mediaType, name: 'Search Result', poster: rpdbPoster(id) })) });
         }
       }
     } catch { /* non-fatal */ }
@@ -567,7 +568,7 @@ async function handleAISearch(config, mediaType, query, res, cacheNamespace = nu
 
   res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
   const ids = mediaType === 'movie' ? movieIds : showIds;
-  return res.json({ metas: ids.map(id => ({ id, type: mediaType, poster: rpdbPoster(id) })) });
+  return res.json({ metas: ids.map(id => ({ id, type: mediaType, name: 'Search Result', poster: rpdbPoster(id) })) });
 }
 
 // ── Catalog ───────────────────────────────────────────────────

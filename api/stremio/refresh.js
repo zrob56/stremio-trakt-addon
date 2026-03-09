@@ -1,5 +1,7 @@
 import { Redis } from '@upstash/redis';
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const MOVIE_GENRE_KEYS = ['overall','action','adventure','animation','comedy','crime','documentary','drama','fantasy','horror','mystery','romance','scifi','thriller','western'];
 const SHOW_GENRE_KEYS  = ['overall','action','adventure','animation','comedy','crime','drama','fantasy','horror','mystery','romance','scifi','thriller'];
 
@@ -26,8 +28,8 @@ export default async function handler(req, res) {
   }
 
   const { uuid } = req.body || {};
-  if (!uuid) {
-    return res.status(400).json({ error: 'uuid is required' });
+  if (!uuid || !UUID_REGEX.test(uuid)) {
+    return res.status(400).json({ error: 'Invalid uuid' });
   }
 
   const redis = getRedis();

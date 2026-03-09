@@ -113,6 +113,7 @@ export default async function handler(req, res) {
     ...(customInstructions?.trim() ? { customInstructions: customInstructions.trim() } : {}),
     ...(excludedFromFeed?.length ? { excludedFromFeed } : {}),
     manageKey: existingConfig?.manageKey || createManageKey(),
+    ...(existingConfig?.traktLists?.length ? { traktLists: existingConfig.traktLists } : {}),
   };
 
   // Fetch Trakt username to use as shared cache namespace across installs
