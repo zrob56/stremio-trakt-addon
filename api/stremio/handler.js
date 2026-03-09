@@ -285,7 +285,7 @@ function handleManifest(config, res) {
 const GEMINI_CATALOG_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
 // Ultra-fast model for real-time search
-const GEMINI_SEARCH_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent';
+const GEMINI_SEARCH_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent';
 
 // Fetch Trakt history for the given media type and return formatted lists.
 async function fetchTraktHistory(config, isShow) {
@@ -536,59 +536,29 @@ async function handleAISearch(config, mediaType, query, res, cacheNamespace = nu
   const redis = cacheNamespace ? getRedis() : null;
   const normalizedQuery = query.trim().toLowerCase().replace(/\s+/g, ' ');
   const cacheKey = cacheNamespace ? `ai-search:${cacheNamespace}:${normalizedQuery}` : null;
-  const lockKey  = cacheNamespace ? `ai-search-lock:${cacheNamespace}:${normalizedQuery}` : null;
 
-  // Helper: read from cache, returns item array or null
-  async function readFromCache() {
-    if (!redis || !cacheKey) return null;
+  // Check cache — new format is { movie: [...], series: [...] }
+  if (redis && cacheKey) {
     try {
       const cached = await redis.get(cacheKey);
       if (cached) {
         const data = typeof cached === 'string' ? JSON.parse(cached) : cached;
         if (data && typeof data === 'object' && !Array.isArray(data) && (data.movie || data.series)) {
-          return (data[mediaType] || []).map(m => (typeof m === 'string' ? { id: m } : m)).filter(m => m.id);
+          const cachedSearchItems = (data[mediaType] || []).map(m => (typeof m === 'string' ? { id: m } : m)).filter(m => m.id);
+          return res.json({ metas: cachedSearchItems.map(m => ({
+            id: m.id,
+            type: mediaType,
+            name: m.name || undefined,
+            poster: rpdbPoster(m.id),
+            releaseInfo: m.year ? String(m.year) : undefined,
+            description: m.overview || undefined,
+            imdbRating: m.rating ? m.rating.toFixed(1) : undefined,
+            genres: m.genres || undefined,
+            behaviorHints: mediaType === 'movie' ? { defaultVideoId: m.id } : undefined,
+          })) });
         }
       }
     } catch { /* non-fatal */ }
-    return null;
-  }
-
-  // Helper: format and send items as metas response
-  function sendCachedItems(items) {
-    return res.json({ metas: items.map(m => ({
-      id: m.id,
-      type: mediaType,
-      name: m.name || undefined,
-      poster: rpdbPoster(m.id),
-      releaseInfo: m.year ? String(m.year) : undefined,
-      description: m.overview || undefined,
-      imdbRating: m.rating ? m.rating.toFixed(1) : undefined,
-      genres: m.genres || undefined,
-      behaviorHints: mediaType === 'movie' ? { defaultVideoId: m.id } : undefined,
-    })) });
-  }
-
-  // Check cache first
-  const cachedItems = await readFromCache();
-  if (cachedItems) return sendCachedItems(cachedItems);
-
-  // Try to acquire lock — only first request calls Gemini
-  let lockAcquired = false;
-  if (redis && lockKey) {
-    try {
-      const result = await redis.set(lockKey, '1', { nx: true, ex: 30 });
-      lockAcquired = result === 'OK' || result === true;
-    } catch { /* non-fatal */ }
-  }
-
-  // Lock not acquired — poll for cache result (up to 4s), then fall through as safety
-  if (!lockAcquired && redis && cacheKey) {
-    for (let i = 0; i < 8; i++) {
-      await new Promise(r => setTimeout(r, 500));
-      const polledItems = await readFromCache();
-      if (polledItems) return sendCachedItems(polledItems);
-    }
-    // Timeout — fall through and call Gemini anyway
   }
 
   const headers = traktHeaders(config.clientId, config.accessToken);
@@ -616,28 +586,16 @@ async function handleAISearch(config, mediaType, query, res, cacheNamespace = nu
     .filter(d => d?.show?.ids?.imdb && normTitle(d.show.title || '') === normTitleQ && /^tt\d+$/.test(d.show.ids.imdb))
     .map(d => ({ id: d.show.ids.imdb, name: d.show.title, year: d.show.year, rating: d.show.rating, overview: d.show.overview, genres: d.show.genres }));
 
-  // Gemini failed — release lock, return loose Trakt fallback without caching
-  if (!geminiRes.ok) {
-    if (lockAcquired && redis && lockKey) {
-      try { await redis.del(lockKey); } catch { /* non-fatal */ }
-    }
-    const looseMovieItems = (Array.isArray(exactMovieData) ? exactMovieData : [])
-      .filter(d => d?.movie?.ids?.imdb && /^tt\d+$/.test(d.movie.ids.imdb))
-      .map(d => ({ id: d.movie.ids.imdb, name: d.movie.title, year: d.movie.year, rating: d.movie.rating, overview: d.movie.overview, genres: d.movie.genres }));
-    const looseShowItems = (Array.isArray(exactShowData) ? exactShowData : [])
-      .filter(d => d?.show?.ids?.imdb && /^tt\d+$/.test(d.show.ids.imdb))
-      .map(d => ({ id: d.show.ids.imdb, name: d.show.title, year: d.show.year, rating: d.show.rating, overview: d.show.overview, genres: d.show.genres }));
-    return sendCachedItems(mediaType === 'movie' ? looseMovieItems : looseShowItems);
-  }
-
   // Parse Gemini response
   let parsed = { movies: [], shows: [] };
-  try {
-    const geminiData = await geminiRes.json();
-    const raw = JSON.parse(geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
-    if (Array.isArray(raw.movies)) parsed.movies = raw.movies;
-    if (Array.isArray(raw.shows)) parsed.shows = raw.shows;
-  } catch { /* use empty */ }
+  if (geminiRes.ok) {
+    try {
+      const geminiData = await geminiRes.json();
+      const raw = JSON.parse(geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
+      if (Array.isArray(raw.movies)) parsed.movies = raw.movies;
+      if (Array.isArray(raw.shows)) parsed.shows = raw.shows;
+    } catch { /* use empty */ }
+  }
 
   // Resolve Gemini suggestions to IMDb items for both types concurrently
   const [aiMovieItems, aiShowItems] = await Promise.all([
@@ -658,11 +616,6 @@ async function handleAISearch(config, mediaType, query, res, cacheNamespace = nu
 
   if (redis && cacheKey && (movieItems.length > 0 || showItems.length > 0)) {
     try { await redis.set(cacheKey, JSON.stringify({ movie: movieItems, series: showItems }), { ex: 3600 }); } catch { /* non-fatal */ }
-  }
-
-  // Release lock now that cache is populated
-  if (lockAcquired && redis && lockKey) {
-    try { await redis.del(lockKey); } catch { /* non-fatal */ }
   }
 
   res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
