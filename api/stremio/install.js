@@ -138,8 +138,8 @@ export default async function handler(req, res) {
   // Re-use existing UUID (update) or generate a new one
   const uuid = existingUuid || crypto.randomUUID();
 
-  // 35-day sliding TTL — reset on every valid request; orphaned UUIDs expire automatically
-  await redis.set(`user:${uuid}`, JSON.stringify(config), { ex: 3024000 });
+  // 2-year sliding TTL — reset on every valid request; orphaned UUIDs expire automatically
+  await redis.set(`user:${uuid}`, JSON.stringify(config), { ex: 63072000 });
 
   return res.json({ uuid, manageKey: config.manageKey });
 }

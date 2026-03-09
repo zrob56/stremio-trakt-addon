@@ -43,7 +43,7 @@ async function refreshToken(config) {
 async function saveRefreshedConfig(uuid, newConfig, redis) {
   if (!uuid || !redis) return;
   try {
-    await redis.set(`user:${uuid}`, JSON.stringify(newConfig), { ex: 3024000 });
+    await redis.set(`user:${uuid}`, JSON.stringify(newConfig), { ex: 63072000 });
   } catch { /* non-fatal */ }
 }
 

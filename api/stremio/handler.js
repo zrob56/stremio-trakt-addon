@@ -28,7 +28,7 @@ async function resolveConfig(encoded) {
     const raw = await redis.get(`user:${encoded}`);
     if (!raw) return { config: null, uuid: null };
     const config = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    redis.expire(`user:${encoded}`, 3024000).catch(() => {}); // sliding 35-day TTL
+    redis.expire(`user:${encoded}`, 63072000).catch(() => {}); // sliding 2-year TTL
     return { config, uuid: encoded };
   } catch {
     return { config: null, uuid: null };
@@ -89,7 +89,7 @@ async function saveRefreshedConfig(uuid, newConfig) {
   try {
     const redis = getRedis();
     if (!redis) return;
-    await redis.set(`user:${uuid}`, JSON.stringify(newConfig), { ex: 3024000 });
+    await redis.set(`user:${uuid}`, JSON.stringify(newConfig), { ex: 63072000 });
   } catch { /* non-fatal — request already succeeded */ }
 }
 
@@ -385,17 +385,22 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
           const t = d[traktType];
           return t?.ids?.imdb && norm(t.title || '') === q && Math.abs((t.year || 0) - item.year) <= 1;
         });
-        if (exact) return exact[traktType].ids.imdb;
+        if (exact) {
+          const t = exact[traktType];
+          return { id: t.ids.imdb, name: t.title, year: t.year, rating: t.rating, overview: t.overview, genres: t.genres };
+        }
         const top = data[0]?.[traktType];
-        if (top?.ids?.imdb && Math.abs((top.year || 0) - item.year) <= 1) return top.ids.imdb;
+        if (top?.ids?.imdb && Math.abs((top.year || 0) - item.year) <= 1) {
+          return { id: top.ids.imdb, name: top.title, year: top.year, rating: top.rating, overview: top.overview, genres: top.genres };
+        }
         return null;
       } catch { return null; }
     });
-    const imdbIds = resolved.filter(id => id && /^tt\d+$/.test(id));
-    result[genre] = imdbIds;
-    if (redis && cacheNamespace && imdbIds.length > 0) {
+    const genreItems = resolved.filter(item => item && /^tt\d+$/.test(item.id));
+    result[genre] = genreItems;
+    if (redis && cacheNamespace && genreItems.length > 0) {
       const cacheKey = `ai:${cacheNamespace}:ai-${rawType}-${genre}`;
-      try { await redis.set(cacheKey, JSON.stringify(imdbIds), { ex: 2592000 }); } catch { /* non-fatal */ }
+      try { await redis.set(cacheKey, JSON.stringify(genreItems), { ex: 2592000 }); } catch { /* non-fatal */ }
     }
   }
 
@@ -415,12 +420,20 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, cacheName
       const cached = await redis.get(cacheKey);
       if (cached) {
         const data = typeof cached === 'string' ? JSON.parse(cached) : cached;
-        // Normalize: old format is object[], new format is string[]
-        const ids = (data.length > 0 && typeof data[0] !== 'string')
-          ? data.map(m => m.id).filter(Boolean)
-          : data;
-        const page = ids.slice(skip, skip + 40);
-        return res.json({ metas: page.map(id => ({ id, type: mediaType, name: mediaType === 'series' ? 'Show Pick' : 'Movie Pick', poster: rpdbPoster(id) })) });
+        const cachedItems = Array.isArray(data)
+          ? data.map(m => (typeof m === 'string' ? { id: m } : m)).filter(m => m.id)
+          : [];
+        const page = cachedItems.slice(skip, skip + 40);
+        return res.json({ metas: page.map(m => ({
+          id: m.id,
+          type: mediaType,
+          name: m.name || undefined,
+          poster: rpdbPoster(m.id),
+          releaseInfo: m.year ? String(m.year) : undefined,
+          description: m.overview || undefined,
+          imdbRating: m.rating ? m.rating.toFixed(1) : undefined,
+          genres: m.genres || undefined,
+        })) });
       }
     } catch { /* non-fatal */ }
   }
@@ -447,9 +460,18 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, cacheName
   try {
     // Batched call: one Gemini request warms all genre keys for this media type at once
     const allResults = await generateAndCacheAllGenres(mediaType, config, redis, cacheNamespace);
-    const imdbIds = allResults?.[genreKey] ?? [];
+    const genItems = allResults?.[genreKey] ?? [];
     res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
-    return res.json({ metas: imdbIds.slice(0, 40).map(id => ({ id, type: mediaType, name: mediaType === 'series' ? 'Show Pick' : 'Movie Pick', poster: rpdbPoster(id) })) });
+    return res.json({ metas: genItems.slice(0, 40).map(m => ({
+      id: m.id,
+      type: mediaType,
+      name: m.name || undefined,
+      poster: rpdbPoster(m.id),
+      releaseInfo: m.year ? String(m.year) : undefined,
+      description: m.overview || undefined,
+      imdbRating: m.rating ? m.rating.toFixed(1) : undefined,
+      genres: m.genres || undefined,
+    })) });
   } finally {
     if (lockKey && lockAcquired) {
       try { await redis.del(lockKey); } catch { /* non-fatal */ }
@@ -477,13 +499,18 @@ async function resolveImdbIds(items, traktType, headers) {
         const t = d[traktType];
         return t?.ids?.imdb && norm(t.title || '') === q && Math.abs((t.year || 0) - item.year) <= 1;
       });
-      if (exact) return exact[traktType].ids.imdb;
+      if (exact) {
+        const t = exact[traktType];
+        return { id: t.ids.imdb, name: t.title, year: t.year, rating: t.rating, overview: t.overview, genres: t.genres };
+      }
       const top = data[0]?.[traktType];
-      if (top?.ids?.imdb && Math.abs((top.year || 0) - item.year) <= 1) return top.ids.imdb;
+      if (top?.ids?.imdb && Math.abs((top.year || 0) - item.year) <= 1) {
+        return { id: top.ids.imdb, name: top.title, year: top.year, rating: top.rating, overview: top.overview, genres: top.genres };
+      }
       return null;
     } catch { return null; }
   });
-  return resolved.filter(id => id && /^tt\d+$/.test(id));
+  return resolved.filter(item => item && /^tt\d+$/.test(item.id));
 }
 
 async function handleAISearch(config, mediaType, query, res, cacheNamespace = null) {
@@ -499,8 +526,17 @@ async function handleAISearch(config, mediaType, query, res, cacheNamespace = nu
       if (cached) {
         const data = typeof cached === 'string' ? JSON.parse(cached) : cached;
         if (data && typeof data === 'object' && !Array.isArray(data) && (data.movie || data.series)) {
-          const ids = data[mediaType] || [];
-          return res.json({ metas: ids.map(id => ({ id, type: mediaType, name: 'Search Result', poster: rpdbPoster(id) })) });
+          const cachedSearchItems = (data[mediaType] || []).map(m => (typeof m === 'string' ? { id: m } : m)).filter(m => m.id);
+          return res.json({ metas: cachedSearchItems.map(m => ({
+            id: m.id,
+            type: mediaType,
+            name: m.name || undefined,
+            poster: rpdbPoster(m.id),
+            releaseInfo: m.year ? String(m.year) : undefined,
+            description: m.overview || undefined,
+            imdbRating: m.rating ? m.rating.toFixed(1) : undefined,
+            genres: m.genres || undefined,
+          })) });
         }
       }
     } catch { /* non-fatal */ }
@@ -525,14 +561,12 @@ async function handleAISearch(config, mediaType, query, res, cacheNamespace = nu
 
   // Exact Trakt matches (normalized title match, article-stripped)
   const normTitleQ = normTitle(q);
-  const exactMovieIds = (Array.isArray(exactMovieData) ? exactMovieData : [])
-    .filter(d => d?.movie?.ids?.imdb && normTitle(d.movie.title || '') === normTitleQ)
-    .map(d => d.movie.ids.imdb)
-    .filter(id => /^tt\d+$/.test(id));
-  const exactShowIds = (Array.isArray(exactShowData) ? exactShowData : [])
-    .filter(d => d?.show?.ids?.imdb && normTitle(d.show.title || '') === normTitleQ)
-    .map(d => d.show.ids.imdb)
-    .filter(id => /^tt\d+$/.test(id));
+  const exactMovieItems = (Array.isArray(exactMovieData) ? exactMovieData : [])
+    .filter(d => d?.movie?.ids?.imdb && normTitle(d.movie.title || '') === normTitleQ && /^tt\d+$/.test(d.movie.ids.imdb))
+    .map(d => ({ id: d.movie.ids.imdb, name: d.movie.title, year: d.movie.year, rating: d.movie.rating, overview: d.movie.overview, genres: d.movie.genres }));
+  const exactShowItems = (Array.isArray(exactShowData) ? exactShowData : [])
+    .filter(d => d?.show?.ids?.imdb && normTitle(d.show.title || '') === normTitleQ && /^tt\d+$/.test(d.show.ids.imdb))
+    .map(d => ({ id: d.show.ids.imdb, name: d.show.title, year: d.show.year, rating: d.show.rating, overview: d.show.overview, genres: d.show.genres }));
 
   // Parse Gemini response
   let parsed = { movies: [], shows: [] };
@@ -545,30 +579,39 @@ async function handleAISearch(config, mediaType, query, res, cacheNamespace = nu
     } catch { /* use empty */ }
   }
 
-  // Resolve Gemini suggestions to IMDb IDs for both types concurrently
-  const [aiMovieIds, aiShowIds] = await Promise.all([
+  // Resolve Gemini suggestions to IMDb items for both types concurrently
+  const [aiMovieItems, aiShowItems] = await Promise.all([
     resolveImdbIds(parsed.movies, 'movie', headers),
     resolveImdbIds(parsed.shows, 'show', headers),
   ]);
 
-  // Merge: exact match first, then AI results (deduplicated)
-  const mergeIds = (exact, ai) => {
-    const seen = new Set(exact);
+  // Merge: exact match first, then AI results (deduplicated by id)
+  const mergeItems = (exact, ai) => {
+    const seen = new Set(exact.map(m => m.id));
     const result = [...exact];
-    for (const id of ai) { if (!seen.has(id)) { seen.add(id); result.push(id); } }
+    for (const m of ai) { if (!seen.has(m.id)) { seen.add(m.id); result.push(m); } }
     return result;
   };
 
-  const movieIds = mergeIds(exactMovieIds, aiMovieIds);
-  const showIds  = mergeIds(exactShowIds,  aiShowIds);
+  const movieItems = mergeItems(exactMovieItems, aiMovieItems);
+  const showItems  = mergeItems(exactShowItems,  aiShowItems);
 
-  if (redis && cacheKey && (movieIds.length > 0 || showIds.length > 0)) {
-    try { await redis.set(cacheKey, JSON.stringify({ movie: movieIds, series: showIds }), { ex: 3600 }); } catch { /* non-fatal */ }
+  if (redis && cacheKey && (movieItems.length > 0 || showItems.length > 0)) {
+    try { await redis.set(cacheKey, JSON.stringify({ movie: movieItems, series: showItems }), { ex: 3600 }); } catch { /* non-fatal */ }
   }
 
   res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
-  const ids = mediaType === 'movie' ? movieIds : showIds;
-  return res.json({ metas: ids.map(id => ({ id, type: mediaType, name: 'Search Result', poster: rpdbPoster(id) })) });
+  const searchItems = mediaType === 'movie' ? movieItems : showItems;
+  return res.json({ metas: searchItems.map(m => ({
+    id: m.id,
+    type: mediaType,
+    name: m.name || undefined,
+    poster: rpdbPoster(m.id),
+    releaseInfo: m.year ? String(m.year) : undefined,
+    description: m.overview || undefined,
+    imdbRating: m.rating ? m.rating.toFixed(1) : undefined,
+    genres: m.genres || undefined,
+  })) });
 }
 
 // ── Catalog ───────────────────────────────────────────────────
