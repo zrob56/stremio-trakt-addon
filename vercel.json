@@ -3,6 +3,12 @@
   "functions": {
     "api/stremio/pregenerate.js": {
       "maxDuration": 60
+    },
+    "api/stremio/prewarm.js": {
+      "maxDuration": 60
+    },
+    "api/stremio/handler.js": {
+      "maxDuration": 60
     }
   },
   "crons": [

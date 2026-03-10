@@ -21,7 +21,14 @@ function getRedis() {
 
 async function resolveConfig(encoded) {
   if (!encoded) return { config: null, uuid: null };
-  if (!UUID_REGEX.test(encoded)) return { config: null, uuid: null };
+  if (!UUID_REGEX.test(encoded)) {
+    try {
+      const decoded = Buffer.from(encoded.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+      return { config: JSON.parse(decoded), uuid: null };
+    } catch {
+      return { config: null, uuid: null };
+    }
+  }
   const redis = getRedis();
   if (!redis) return { config: null, uuid: null };
   try {
