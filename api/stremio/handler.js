@@ -169,7 +169,11 @@ async function refreshToken(config, uuid) {
         grant_type: 'refresh_token',
       }),
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      const errText = await response.text().catch(() => '');
+      console.error('[RefreshToken] Failed:', response.status, errText.slice(0, 300));
+      return null;
+    }
     const tokens = await response.json();
     return { ...config, accessToken: tokens.access_token, refreshToken: tokens.refresh_token };
   } finally {
@@ -584,8 +588,8 @@ async function handleAISearch(config, mediaType, query, res, cacheNamespace = nu
 
   // Run exact Trakt title search + Gemini call concurrently
   const [exactMovieData, exactShowData, geminiRes] = await Promise.all([
-    fetchWithRetry(`${TRAKT_BASE}/search/movie?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
-    fetchWithRetry(`${TRAKT_BASE}/search/show?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
+    fetchWithRetry(`${TRAKT_BASE}/search/movie?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : (console.error('[AISearch] Trakt movie search failed:', r.status), [])).catch(e => (console.error('[AISearch] Trakt movie fetch error:', e.message), [])),
+    fetchWithRetry(`${TRAKT_BASE}/search/show?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : (console.error('[AISearch] Trakt show search failed:', r.status), [])).catch(e => (console.error('[AISearch] Trakt show fetch error:', e.message), [])),
     fetchWithRetry(`${GEMINI_SEARCH_BASE}?key=${config.geminiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -610,7 +614,10 @@ async function handleAISearch(config, mediaType, query, res, cacheNamespace = nu
       const raw = parseGeminiJson(geminiData);
       if (Array.isArray(raw.movies)) parsed.movies = raw.movies;
       if (Array.isArray(raw.shows)) parsed.shows = raw.shows;
-    } catch { /* use empty */ }
+    } catch (e) { console.error('[AISearch] Gemini parse error:', e.message); }
+  } else {
+    const errText = await geminiRes.text().catch(() => '');
+    console.error('[AISearch] Gemini HTTP error:', geminiRes.status, errText.slice(0, 300));
   }
 
   // Resolve Gemini suggestions to IMDb items for both types concurrently
@@ -787,6 +794,7 @@ export default async function handler(req, res) {
   if (resource === 'manifest') return handleManifest(config, res);
 
   if (!config || !config.accessToken || (!config.clientId && !process.env.TRAKT_CLIENT_ID)) {
+    console.error('[Handler] Config guard blocked: accessToken=', !!config?.accessToken, 'clientId=', !!(config?.clientId || process.env.TRAKT_CLIENT_ID));
     if (resource === 'meta') return res.json({ meta: null });
     return res.json({ metas: [] });
   }
@@ -795,6 +803,7 @@ export default async function handler(req, res) {
     try {
       return await handleCatalog(config, type, id, extra, res, uuid);
     } catch (err) {
+      console.error('[Catalog] Error for id:', id, '-', err.message);
       if (err instanceof TraktAuthError && config.refreshToken) {
         const newConfig = await refreshToken(config, uuid);
         if (newConfig) {
@@ -802,7 +811,8 @@ export default async function handler(req, res) {
           await saveRefreshedConfig(uuid, newConfig);
           try {
             return await handleCatalog(newConfig, type, id, extra, res, uuid);
-          } catch {
+          } catch (err2) {
+            console.error('[Catalog] Error after token refresh for id:', id, '-', err2.message);
             return res.json({ metas: [] });
           }
         }
