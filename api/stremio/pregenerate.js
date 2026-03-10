@@ -2,7 +2,7 @@ import { Redis } from '@upstash/redis';
 import { generateAndCacheAllGenres, resolveCacheNamespace } from './handler.js';
 
 const AI_CATALOG_TTL = 2592000; // 30 days
-const BUDGET_MS = 270000;      // stop generating after 4.5min (30s margin before 5min cron timeout)
+const BUDGET_MS = 50000;       // stop generating after 50s (10s margin before Vercel's 60s kill)
 const SLEEP_MS = 15000;        // 15s gap between Gemini calls → 4 RPM, safe under 5 RPM
 
 function getRedis() {
