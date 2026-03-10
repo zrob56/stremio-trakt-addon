@@ -1385,7 +1385,7 @@
                         }),
                     });
                 } catch { /* non-fatal */ }
-            }, [uuid, clientId, clientSecret, tokens, geminiKey, enabledCatalogs, customInstructions, excludedFromFeed, traktLists]);
+            }, [uuid, clientId, clientSecret, tokens, geminiKey, enabledCatalogs, customInstructions, excludedFromFeed]);
 
             // Sync excludedFromFeed from KV on mount (so a fresh browser gets the server state)
             useEffect(() => {
@@ -1466,7 +1466,7 @@
                 if (!uuid) return;
                 const t = setTimeout(() => pushToKV(), 500);
                 return () => clearTimeout(t);
-            }, [enabledCatalogs, traktLists, pushToKV]);
+            }, [enabledCatalogs, pushToKV]);
 
             const saveGeminiKey = useCallback(async () => {
                 const key = geminiKey.trim();

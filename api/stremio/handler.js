@@ -21,14 +21,7 @@ function getRedis() {
 
 async function resolveConfig(encoded) {
   if (!encoded) return { config: null, uuid: null };
-  if (!UUID_REGEX.test(encoded)) {
-    try {
-      const decoded = Buffer.from(encoded.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
-      return { config: JSON.parse(decoded), uuid: null };
-    } catch {
-      return { config: null, uuid: null };
-    }
-  }
+  if (!UUID_REGEX.test(encoded)) return { config: null, uuid: null };
   const redis = getRedis();
   if (!redis) return { config: null, uuid: null };
   try {
@@ -176,11 +169,7 @@ async function refreshToken(config, uuid) {
         grant_type: 'refresh_token',
       }),
     });
-    if (!response.ok) {
-      const errText = await response.text().catch(() => '');
-      console.error('[RefreshToken] Failed:', response.status, errText.slice(0, 300));
-      return null;
-    }
+    if (!response.ok) return null;
     const tokens = await response.json();
     return { ...config, accessToken: tokens.access_token, refreshToken: tokens.refresh_token };
   } finally {
@@ -399,7 +388,7 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
   for (const genre of genreKeys) {
     const items = parsed[genre];
     if (!Array.isArray(items)) continue;
-    const validItems = items.filter(item => item && typeof item.title === 'string');
+    const validItems = items.filter(item => item && typeof item.title === 'string' && item.year);
     const resolved = await mapConcurrent(validItems, 5, async item => {
       try {
         const r = await fetchWithRetry(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&limit=5`, { headers });
@@ -416,11 +405,8 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
           return { id: t.ids.imdb, name: t.title, year: t.year, rating: t.rating, overview: t.overview, genres: t.genres };
         }
         const top = data[0]?.[traktType];
-        if (top?.ids?.imdb) {
-          const yearDiff = (top.year && item.year) ? Math.abs(top.year - item.year) : 0;
-          if (!item.year || !top.year || yearDiff <= 3) {
-            return { id: top.ids.imdb, name: top.title, year: top.year, rating: top.rating, overview: top.overview, genres: top.genres };
-          }
+        if (top?.ids?.imdb && Math.abs((top.year || 0) - item.year) <= 1) {
+          return { id: top.ids.imdb, name: top.title, year: top.year, rating: top.rating, overview: top.overview, genres: top.genres };
         }
         return null;
       } catch { return null; }
@@ -516,19 +502,9 @@ const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' '
 // norm() but also strips leading articles ("the ", "a ", "an ")
 const normTitle = s => norm(s).replace(/^(the|a|an) /, '');
 
-function parseGeminiJson(geminiData) {
-  try {
-    let text = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) return {};
-    // Strip markdown code fences if present
-    text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
-    return JSON.parse(text);
-  } catch { return {}; }
-}
-
 async function resolveImdbIds(items, traktType, headers) {
   if (!Array.isArray(items)) return [];
-  const validItems = items.filter(item => item && typeof item.title === 'string');
+  const validItems = items.filter(item => item && typeof item.title === 'string' && item.year);
   const resolved = await mapConcurrent(validItems, 5, async item => {
     try {
       const r = await fetchWithRetry(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&limit=5`, { headers });
@@ -545,11 +521,8 @@ async function resolveImdbIds(items, traktType, headers) {
         return { id: t.ids.imdb, name: t.title, year: t.year, rating: t.rating, overview: t.overview, genres: t.genres };
       }
       const top = data[0]?.[traktType];
-      if (top?.ids?.imdb) {
-        const yearDiff = (top.year && item.year) ? Math.abs(top.year - item.year) : 0;
-        if (!item.year || !top.year || yearDiff <= 3) {
-          return { id: top.ids.imdb, name: top.title, year: top.year, rating: top.rating, overview: top.overview, genres: top.genres };
-        }
+      if (top?.ids?.imdb && Math.abs((top.year || 0) - item.year) <= 1) {
+        return { id: top.ids.imdb, name: top.title, year: top.year, rating: top.rating, overview: top.overview, genres: top.genres };
       }
       return null;
     } catch { return null; }
@@ -595,8 +568,8 @@ async function handleAISearch(config, mediaType, query, res, cacheNamespace = nu
 
   // Run exact Trakt title search + Gemini call concurrently
   const [exactMovieData, exactShowData, geminiRes] = await Promise.all([
-    fetchWithRetry(`${TRAKT_BASE}/search/movie?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : (console.error('[AISearch] Trakt movie search failed:', r.status), [])).catch(e => (console.error('[AISearch] Trakt movie fetch error:', e.message), [])),
-    fetchWithRetry(`${TRAKT_BASE}/search/show?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : (console.error('[AISearch] Trakt show search failed:', r.status), [])).catch(e => (console.error('[AISearch] Trakt show fetch error:', e.message), [])),
+    fetchWithRetry(`${TRAKT_BASE}/search/movie?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
+    fetchWithRetry(`${TRAKT_BASE}/search/show?query=${encodeURIComponent(q)}&limit=5`, { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
     fetchWithRetry(`${GEMINI_SEARCH_BASE}?key=${config.geminiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -618,13 +591,10 @@ async function handleAISearch(config, mediaType, query, res, cacheNamespace = nu
   if (geminiRes.ok) {
     try {
       const geminiData = await geminiRes.json();
-      const raw = parseGeminiJson(geminiData);
+      const raw = JSON.parse(geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
       if (Array.isArray(raw.movies)) parsed.movies = raw.movies;
       if (Array.isArray(raw.shows)) parsed.shows = raw.shows;
-    } catch (e) { console.error('[AISearch] Gemini parse error:', e.message); }
-  } else {
-    const errText = await geminiRes.text().catch(() => '');
-    console.error('[AISearch] Gemini HTTP error:', geminiRes.status, errText.slice(0, 300));
+    } catch { /* use empty */ }
   }
 
   // Resolve Gemini suggestions to IMDb items for both types concurrently
@@ -801,7 +771,6 @@ export default async function handler(req, res) {
   if (resource === 'manifest') return handleManifest(config, res);
 
   if (!config || !config.accessToken || (!config.clientId && !process.env.TRAKT_CLIENT_ID)) {
-    console.error('[Handler] Config guard blocked: accessToken=', !!config?.accessToken, 'clientId=', !!(config?.clientId || process.env.TRAKT_CLIENT_ID));
     if (resource === 'meta') return res.json({ meta: null });
     return res.json({ metas: [] });
   }
@@ -810,7 +779,6 @@ export default async function handler(req, res) {
     try {
       return await handleCatalog(config, type, id, extra, res, uuid);
     } catch (err) {
-      console.error('[Catalog] Error for id:', id, '-', err.message);
       if (err instanceof TraktAuthError && config.refreshToken) {
         const newConfig = await refreshToken(config, uuid);
         if (newConfig) {
@@ -818,8 +786,7 @@ export default async function handler(req, res) {
           await saveRefreshedConfig(uuid, newConfig);
           try {
             return await handleCatalog(newConfig, type, id, extra, res, uuid);
-          } catch (err2) {
-            console.error('[Catalog] Error after token refresh for id:', id, '-', err2.message);
+          } catch {
             return res.json({ metas: [] });
           }
         }

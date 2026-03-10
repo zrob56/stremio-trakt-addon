@@ -8,7 +8,7 @@
   "crons": [
     {
       "path": "/api/stremio/pregenerate",
-      "schedule": "0 11 * * *"
+      "schedule": "0 12 * * *"
     }
   ],
  "redirects": [
