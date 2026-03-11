@@ -113,7 +113,9 @@ async function generateCatalog(config, mediaType, genreKey) {
   const geminiData = await geminiRes.json();
   let parsed;
   try {
-    parsed = JSON.parse(geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '[]');
+    const rawText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const arrMatch = rawText.match(/\[[\s\S]*\]/);
+    parsed = JSON.parse(arrMatch ? arrMatch[0] : '[]');
   } catch {
     return [];
   }
@@ -121,7 +123,7 @@ async function generateCatalog(config, mediaType, genreKey) {
   const traktType = isShow ? 'show' : 'movie';
   const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
   const items = parsed.filter(item => item && typeof item.title === 'string' && item.year);
-  const resolved = await mapConcurrent(items, 5, async item => {
+  const resolved = await mapConcurrent(items, 10, async item => {
     try {
       const r = await fetchWithRetry(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&limit=5`, { headers });
       if (!r.ok) return null;

@@ -104,8 +104,8 @@ export default async function handler(req, res) {
       } catch (err) {
         console.error(`pregenerate movie error ${uuid}:`, err.message);
       }
-      await sleep(SLEEP_MS);
       if (Date.now() - startTime > BUDGET_MS) { budgetExceeded = true; break outer; }
+      await sleep(SLEEP_MS);
     }
 
     if (showStale && showCatalogs.length > 0) {
@@ -115,8 +115,8 @@ export default async function handler(req, res) {
       } catch (err) {
         console.error(`pregenerate show error ${uuid}:`, err.message);
       }
-      await sleep(SLEEP_MS);
       if (Date.now() - startTime > BUDGET_MS) { budgetExceeded = true; break outer; }
+      await sleep(SLEEP_MS);
     }
   }
 

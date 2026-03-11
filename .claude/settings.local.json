@@ -5,7 +5,10 @@
       "Bash(cd /c/Users/zachr/Desktop/stremio-trakt-addon && npx vercel --prod 2>&1)",
       "Bash(grep:*)",
       "Bash(git:*)",
-      "Bash(node --check api/stremio/handler.js 2>&1)"
+      "Bash(node --check api/stremio/handler.js 2>&1)",
+      "Bash(cd \"C:/Users/zachr/Desktop/stremio-trakt-addon\" && node --check api/stremio/utils.js 2>&1 && echo \"utils.js OK\")",
+      "Bash(cd \"C:/Users/zachr/Desktop/stremio-trakt-addon\" && for f in api/stremio/*.js; do node --check \"$f\" 2>&1 && echo \"$f OK\" || echo \"FAIL: $f\"; done)",
+      "Bash(node --check api/stremio/handler.js && node --check api/stremio/prewarm.js && echo \"OK\")"
     ]
   }
 }

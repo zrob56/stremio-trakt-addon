@@ -318,7 +318,9 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
   const geminiData = await geminiRes.json();
   let parsed;
   try {
-    parsed = JSON.parse(geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
+    const rawText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const objMatch = rawText.match(/\{[\s\S]*\}/);
+    parsed = JSON.parse(objMatch ? objMatch[0] : '{}');
   } catch (err) {
     console.error('[generateAndCacheAllGenres] JSON parse failed:', err.message);
     return {};
@@ -336,7 +338,7 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
     const items = parsed[genre];
     if (!Array.isArray(items)) return [genre, []];
     const validItems = items.filter(item => item && typeof item.title === 'string' && item.year);
-    const resolved = await mapConcurrent(validItems, 5, async item => {
+    const resolved = await mapConcurrent(validItems, 10, async item => {
       try {
         const r = await fetchWithRetry(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&limit=5`, { headers });
         if (!r.ok) return null;
@@ -459,7 +461,7 @@ const normTitle = s => norm(s).replace(/^(the|a|an) /, '');
 async function resolveImdbIds(items, traktType, headers) {
   if (!Array.isArray(items)) return [];
   const validItems = items.filter(item => item && typeof item.title === 'string' && item.year);
-  const resolved = await mapConcurrent(validItems, 5, async item => {
+  const resolved = await Promise.all(validItems.map(async item => {
     try {
       const r = await fetchWithRetry(`${TRAKT_BASE}/search/${traktType}?query=${encodeURIComponent(item.title)}&limit=5`, { headers });
       if (!r.ok) return null;
@@ -480,7 +482,7 @@ async function resolveImdbIds(items, traktType, headers) {
       }
       return null;
     } catch { return null; }
-  });
+  }));
   return resolved.filter(item => item && /^tt\d+$/.test(item.id));
 }
 
@@ -553,7 +555,9 @@ async function handleAISearch(config, mediaType, query, res, cacheNamespace = nu
   if (geminiRes.ok) {
     try {
       const geminiData = await geminiRes.json();
-      const raw = JSON.parse(geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
+      const rawText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      const objMatch = rawText.match(/\{[\s\S]*\}/);
+      const raw = JSON.parse(objMatch ? objMatch[0] : '{}');
       if (Array.isArray(raw.movies)) parsed.movies = raw.movies;
       if (Array.isArray(raw.shows)) parsed.shows = raw.shows;
     } catch { /* use empty */ }
