@@ -134,9 +134,14 @@ async function generateCatalog(config, mediaType, genreKey) {
     ? `\n\nAdditional instructions from the user: ${config.customInstructions.trim()}`
     : '';
 
+  const excludedList = (config.excludedFromFeed || []).slice(0, 50).join(', ');
+  const excludedClause = excludedList
+    ? `\n\nAlso do not recommend any of these titles the user has excluded: ${excludedList}`
+    : '';
+
   const prompt = isGems
-    ? `You are a hidden gems ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 40 underrated, obscure, or cult classic ${mediaLabel} matching the user's taste — NOT mainstream blockbusters, franchises, or well-known Oscar winners. Do not recommend anything from the lists above.${customClause}\nReturn ONLY a valid JSON array of 40 objects with title and year, no other text:\n[{"title": "Movie Name", "year": 2023}, ...]`
-    : `You are a ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 40 ${mediaLabel}${genreClause} matching the user's taste. Do not recommend anything from the lists above.${customClause}\nReturn ONLY a valid JSON array of 40 objects with title and year, no other text:\n[{"title": "Movie Name", "year": 2023}, ...]`;
+    ? `You are a hidden gems ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 40 underrated, obscure, or cult classic ${mediaLabel} matching the user's taste — NOT mainstream blockbusters, franchises, or well-known Oscar winners. Do not recommend anything from the lists above.${customClause}${excludedClause}\nReturn ONLY a valid JSON array of 40 objects with title and year, no other text:\n[{"title": "Movie Name", "year": 2023}, ...]`
+    : `You are a ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 40 ${mediaLabel}${genreClause} matching the user's taste. Do not recommend anything from the lists above.${customClause}${excludedClause}\nReturn ONLY a valid JSON array of 40 objects with title and year, no other text:\n[{"title": "Movie Name", "year": 2023}, ...]`;
 
   const geminiRes = await fetchWithRetry(`${GEMINI_BASE}?key=${config.geminiKey}`, {
     method: 'POST',

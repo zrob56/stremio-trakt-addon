@@ -384,7 +384,12 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
     return `- ${k}: specifically ${GENRE_LABELS[k]} genre`;
   }).join('\n');
 
-  const prompt = `You are a ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 40 ${mediaLabel} for EACH of the following categories. Do not recommend anything from the lists above.${customClause}\n\nCategories and their rules:\n${categoryRules}\n\nReturn ONLY a valid JSON object where each key is a category and the value is an array of 40 objects with title and year. No other text:\n{"overall": [{"title": "...", "year": 2023}, ...], ...}`;
+  const excludedList = (config.excludedFromFeed || []).slice(0, 50).join(', ');
+  const excludedClause = excludedList
+    ? `\n\nAlso do not recommend any of these titles the user has excluded: ${excludedList}`
+    : '';
+
+  const prompt = `You are a ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 40 ${mediaLabel} for EACH of the following categories. Do not recommend anything from the lists above.${customClause}${excludedClause}\n\nCategories and their rules:\n${categoryRules}\n\nReturn ONLY a valid JSON object where each key is a category and the value is an array of 40 objects with title and year. No other text:\n{"overall": [{"title": "...", "year": 2023}, ...], ...}`;
 
   const geminiRes = await fetchWithRetry(`${GEMINI_CATALOG_BASE}?key=${config.geminiKey}`, {
     method: 'POST',
@@ -603,7 +608,15 @@ async function handleAISearch(config, mediaType, query, res, cacheNamespace = nu
   const headers = traktHeaders(config.clientId, config.accessToken);
   const q = query.trim();
 
-  const prompt = `You are a movie and TV show search engine that understands natural language queries.\n\nThe user searched for: "${q}"\n\nReturn exactly 10 movies and 10 TV shows that best match this search. Interpret the query broadly — include titles, themes, time periods, styles, and subgenres that fit. If the query looks like a specific title (possibly with a typo or missing article like "the"), prioritize returning that exact corrected title as the first result.\n\nReturn ONLY a valid JSON object with title and year arrays, no other text:\n{"movies": [{"title": "Movie Name", "year": 2023}], "shows": [{"title": "Show Name", "year": 2023}]}`;
+  const customClause = config.customInstructions?.trim()
+    ? `\n\nUser preferences: ${config.customInstructions.trim()}`
+    : '';
+  const excludedList = (config.excludedFromFeed || []).slice(0, 50).join(', ');
+  const excludedClause = excludedList
+    ? `\n\nDo not include any of these titles the user has excluded: ${excludedList}`
+    : '';
+
+  const prompt = `You are a movie and TV show search engine that understands natural language queries.\n\nThe user searched for: "${q}"\n\nReturn exactly 10 movies and 10 TV shows that best match this search. Interpret the query broadly — include titles, themes, time periods, styles, and subgenres that fit. If the query looks like a specific title (possibly with a typo or missing article like "the"), prioritize returning that exact corrected title as the first result.${customClause}${excludedClause}\n\nReturn ONLY a valid JSON object with title and year arrays, no other text:\n{"movies": [{"title": "Movie Name", "year": 2023}], "shows": [{"title": "Show Name", "year": 2023}]}`;
 
   // Run exact Trakt title search + Gemini call concurrently
   const [exactMovieData, exactShowData, geminiRes] = await Promise.all([
