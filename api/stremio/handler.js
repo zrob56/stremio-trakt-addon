@@ -124,13 +124,22 @@ function setCors(res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
-function parseExtra(extraString) {
-  if (!extraString) return {};
+function parseExtra(extraString, searchParams = null) {
+  if (!extraString && !searchParams) return {};
   const params = {};
-  extraString.split('&').forEach(pair => {
-    const [key, value] = pair.split('=');
-    if (key && value !== undefined) params[key] = decodeURIComponent(value);
-  });
+  if (extraString) {
+    extraString.split('&').forEach(pair => {
+      const [key, value] = pair.split('=');
+      if (key && value !== undefined) params[key] = decodeURIComponent(value);
+    });
+  }
+  if (searchParams) {
+    for (const key of ['skip', 'search', 'genre']) {
+      if (params[key] === undefined && searchParams.has(key)) {
+        params[key] = searchParams.get(key);
+      }
+    }
+  }
   return params;
 }
 
@@ -235,12 +244,18 @@ const ALL_CATALOG_DEFS = [
 
 function handleManifest(config, res) {
   let catalogs;
+  const hasGemini = !!config?.geminiKey;
 
   // Build lookup for user's Trakt list metadata
   const listMeta = {};
   for (const l of (config?.traktLists || [])) {
     listMeta[`trakt-list-${l.slug}`] = l.name;
   }
+
+  const defaultCatalogs = ALL_CATALOG_DEFS.filter(c =>
+    ['trakt-watchlist','trakt-trending','trakt-watchlist-shows','trakt-trending-shows'].includes(c.id) ||
+    (hasGemini && ['ai-movie-overall','ai-show-overall'].includes(c.id))
+  );
 
   if (config?.enabledCatalogs?.length) {
     catalogs = config.enabledCatalogs.flatMap(id => {
@@ -252,18 +267,19 @@ function handleManifest(config, res) {
         ];
       }
       const def = ALL_CATALOG_DEFS.find(c => c.id === id);
-      return def ? [def] : [];
+      if (!def) return [];
+      if (def.id.startsWith('ai-') && !hasGemini) return [];
+      return [def];
     });
+    catalogs = catalogs.filter(Boolean);
+    if (catalogs.length === 0) catalogs = defaultCatalogs;
   } else {
     // Backward compat: utility catalogs + AI overall if gemini key present
-    catalogs = ALL_CATALOG_DEFS.filter(c =>
-      ['trakt-watchlist','trakt-trending','trakt-watchlist-shows','trakt-trending-shows'].includes(c.id) ||
-      (config?.geminiKey && ['ai-movie-overall','ai-show-overall'].includes(c.id))
-    );
+    catalogs = defaultCatalogs;
   }
 
   // Always append AI search catalogs when Gemini key is configured
-  if (config?.geminiKey) {
+  if (hasGemini) {
     for (const id of ['ai-search-movie', 'ai-search-series']) {
       if (!catalogs.some(c => c.id === id)) {
         const def = ALL_CATALOG_DEFS.find(c => c.id === id);
@@ -288,10 +304,7 @@ function handleManifest(config, res) {
 
 // ── AI Catalog ────────────────────────────────────────────────
 
-// Smart model for background catalog generation
-const GEMINI_CATALOG_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
-
-// Ultra-fast model for real-time search
+const GEMINI_CATALOG_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent';
 const GEMINI_SEARCH_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent';
 
 // Fetch Trakt history for the given media type and return formatted lists.
@@ -642,8 +655,8 @@ async function handleAISearch(config, mediaType, query, res, cacheNamespace = nu
 
 // ── Catalog ───────────────────────────────────────────────────
 
-async function handleCatalog(config, type, id, extra, res, uuid = null) {
-  const params = parseExtra(extra);
+async function handleCatalog(config, type, id, extra, res, uuid = null, searchParams = null) {
+  const params = parseExtra(extra, searchParams);
   const page = Math.floor((parseInt(params.skip) || 0) / 20) + 1;
   const headers = traktHeaders(config.clientId, config.accessToken);
 
@@ -784,7 +797,7 @@ export default async function handler(req, res) {
 
   if (resource === 'catalog') {
     try {
-      return await handleCatalog(config, type, id, extra, res, uuid);
+      return await handleCatalog(config, type, id, extra, res, uuid, url.searchParams);
     } catch (err) {
       if (err instanceof TraktAuthError && config.refreshToken) {
         const newConfig = await refreshToken(config, uuid);
@@ -792,7 +805,7 @@ export default async function handler(req, res) {
           // Persist the new tokens so subsequent requests don't loop on refresh
           await saveRefreshedConfig(uuid, newConfig);
           try {
-            return await handleCatalog(newConfig, type, id, extra, res, uuid);
+            return await handleCatalog(newConfig, type, id, extra, res, uuid, url.searchParams);
           } catch {
             return res.json({ metas: [] });
           }
