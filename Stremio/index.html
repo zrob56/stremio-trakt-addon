@@ -973,9 +973,15 @@
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ uuid: installUuid }),
                     });
-                    setToast(r.ok
-                        ? { message: 'AI cache cleared — reload Stremio to get fresh picks', type: 'success' }
-                        : { message: 'Failed to clear cache', type: 'error' });
+                    if (r.ok) {
+                        // Fire-and-forget background prewarm for all genres
+                        const base = `/api/stremio/prewarm?uuid=${installUuid}`;
+                        fetch(`${base}&type=movie`).catch(() => {});
+                        fetch(`${base}&type=show`).catch(() => {});
+                        setToast({ message: 'Cache cleared — regenerating picks in background', type: 'success' });
+                    } else {
+                        setToast({ message: 'Failed to clear cache', type: 'error' });
+                    }
                 } catch {
                     setToast({ message: 'Failed to clear cache', type: 'error' });
                 }

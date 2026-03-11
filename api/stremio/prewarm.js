@@ -1,5 +1,5 @@
 import { Redis } from '@upstash/redis';
-import { fetchWithRetry, resolveCacheNamespace } from './handler.js';
+import { fetchWithRetry, resolveCacheNamespace, generateAndCacheAllGenres } from './handler.js';
 
 const TRAKT_BASE = 'https://api.trakt.tv';
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
@@ -20,6 +20,10 @@ function getRedis() {
   return new Redis({ url: process.env.KV_REST_API_URL, token: process.env.KV_REST_API_TOKEN });
 }
 
+class TraktAuthError extends Error {
+  constructor(msg) { super(msg); this.name = 'TraktAuthError'; }
+}
+
 function setCors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -38,6 +42,7 @@ function traktHeaders(clientId, accessToken) {
 
 async function traktFetch(url, headers) {
   const response = await fetchWithRetry(url, { headers });
+  if (response.status === 401) throw new TraktAuthError('Token expired');
   if (!response.ok) throw new Error(`Trakt API error: ${response.status}`);
   return response.json();
 }
@@ -49,6 +54,34 @@ async function mapConcurrent(items, concurrency, fn) {
     results.push(...batch);
   }
   return results;
+}
+
+async function refreshToken(config) {
+  try {
+    const response = await fetch(`${TRAKT_BASE}/oauth/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        refresh_token: config.refreshToken,
+        client_id: config.clientId || process.env.TRAKT_CLIENT_ID,
+        client_secret: config.clientSecret || process.env.TRAKT_CLIENT_SECRET || '',
+        redirect_uri: 'urn:ietf:wg:oauth:2.0:oob',
+        grant_type: 'refresh_token',
+      }),
+    });
+    if (!response.ok) return null;
+    const tokens = await response.json();
+    return { ...config, accessToken: tokens.access_token, refreshToken: tokens.refresh_token };
+  } catch {
+    return null;
+  }
+}
+
+async function saveRefreshedConfig(redis, uuid, newConfig) {
+  if (!redis || !uuid) return;
+  try {
+    await redis.set(`user:${uuid}`, JSON.stringify(newConfig), { ex: 63072000 });
+  } catch { /* non-fatal */ }
 }
 
 async function generateCatalog(config, mediaType, genreKey) {
@@ -170,9 +203,6 @@ export default async function handler(req, res) {
   if (!type || !['movie', 'show'].includes(type)) {
     return res.status(400).json({ error: 'Invalid type — must be movie or show' });
   }
-  if (!genre) {
-    return res.status(400).json({ error: 'Missing genre' });
-  }
 
   const redis = getRedis();
   if (!redis) {
@@ -197,6 +227,15 @@ export default async function handler(req, res) {
   if (!cacheNamespace) {
     return res.status(400).json({ error: 'Invalid cache namespace' });
   }
+
+  // Batch mode: no genre param → warm all genres for this type in one Gemini call
+  if (!genre) {
+    const mediaType = type === 'show' ? 'series' : 'movie';
+    const result = await generateAndCacheAllGenres(mediaType, config, redis, cacheNamespace);
+    const total = Object.values(result).reduce((s, arr) => s + arr.length, 0);
+    return res.json({ status: 'generated', genres: Object.keys(result).length, total });
+  }
+
   const cacheKey = `ai:${cacheNamespace}:ai-${type}-${genre}`;
 
   // Return immediately if already cached

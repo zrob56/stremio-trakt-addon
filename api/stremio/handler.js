@@ -359,11 +359,15 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
   let history;
   try {
     history = await fetchTraktHistory(config, isShow);
-  } catch {
+  } catch (err) {
+    console.error('[generateAndCacheAllGenres] Trakt history fetch failed:', err.message);
     return {};
   }
   const { headers, topRatedActive, watchedNotRatedActive, disliked } = history;
-  if (history.topRated.length === 0) return {};
+  if (history.topRated.length === 0) {
+    console.error('[generateAndCacheAllGenres] No top-rated items found, skipping');
+    return {};
+  }
 
   const ratedList    = topRatedActive.slice(0, 25).map(m => m.title).join(', ') || 'None';
   const watchedList  = watchedNotRatedActive.slice(0, 20).join(', ') || 'None';
@@ -390,24 +394,32 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
       generationConfig: { temperature, responseMimeType: 'application/json' },
     }),
   });
-  if (!geminiRes.ok) return {};
+  if (!geminiRes.ok) {
+    const errText = await geminiRes.text().catch(() => '');
+    console.error(`[generateAndCacheAllGenres] Gemini error ${geminiRes.status}:`, errText.slice(0, 300));
+    return {};
+  }
 
   const geminiData = await geminiRes.json();
   let parsed;
   try {
     parsed = JSON.parse(geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
-  } catch {
+  } catch (err) {
+    console.error('[generateAndCacheAllGenres] JSON parse failed:', err.message);
     return {};
   }
-  if (typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+    console.error('[generateAndCacheAllGenres] Unexpected Gemini response shape:', typeof parsed);
+    return {};
+  }
 
   const traktType = isShow ? 'show' : 'movie';
   const rawType   = isShow ? 'show' : 'movie';
   const result = {};
 
-  for (const genre of genreKeys) {
+  const genreResults = await Promise.all(genreKeys.map(async genre => {
     const items = parsed[genre];
-    if (!Array.isArray(items)) continue;
+    if (!Array.isArray(items)) return [genre, []];
     const validItems = items.filter(item => item && typeof item.title === 'string' && item.year);
     const resolved = await mapConcurrent(validItems, 5, async item => {
       try {
@@ -432,10 +444,17 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
       } catch { return null; }
     });
     const genreItems = resolved.filter(item => item && /^tt\d+$/.test(item.id));
+    return [genre, genreItems];
+  }));
+
+  for (const [genre, genreItems] of genreResults) {
     result[genre] = genreItems;
     if (redis && cacheNamespace && genreItems.length > 0) {
       const cacheKey = `ai:${cacheNamespace}:ai-${rawType}-${genre}`;
-      try { await redis.set(cacheKey, JSON.stringify(genreItems), { ex: 2592000 }); } catch { /* non-fatal */ }
+      try {
+        await redis.set(cacheKey, JSON.stringify(genreItems), { ex: 2592000 });
+        console.log(`[generateAndCacheAllGenres] Cached ${genreItems.length} items → ${cacheKey}`);
+      } catch { /* non-fatal */ }
     }
   }
 
