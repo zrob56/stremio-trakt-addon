@@ -1,27 +1,4 @@
-import { Redis } from '@upstash/redis';
-
-const TRAKT_BASE = 'https://api.trakt.tv';
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-class TraktAuthError extends Error {
-  constructor(msg) { super(msg); this.name = 'TraktAuthError'; }
-}
-
-function getRedis() {
-  if (!process.env.KV_REST_API_URL || !process.env.KV_REST_API_TOKEN) return null;
-  return new Redis({ url: process.env.KV_REST_API_URL, token: process.env.KV_REST_API_TOKEN });
-}
-
-function traktHeaders(clientId, accessToken) {
-  return {
-    'Content-Type': 'application/json',
-    'trakt-api-version': '2',
-    'trakt-api-key': clientId || process.env.TRAKT_CLIENT_ID,
-    'Authorization': `Bearer ${accessToken}`,
-    'User-Agent': 'stremio-trakt-addon/1.0',
-  };
-}
+import { TRAKT_BASE, UUID_REGEX, TraktAuthError, getRedis, traktHeaders } from './utils.js';
 
 async function refreshToken(config) {
   const response = await fetch(`${TRAKT_BASE}/oauth/token`, {

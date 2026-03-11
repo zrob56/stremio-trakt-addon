@@ -1,16 +1,4 @@
-const TRAKT_BASE = 'https://api.trakt.tv';
-
-function corsHeaders() {
-  return {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
-  };
-}
-
-function setCors(res) {
-  Object.entries(corsHeaders()).forEach(([k, v]) => res.setHeader(k, v));
-}
+import { TRAKT_BASE, setCors } from './utils.js';
 
 async function handleStart(req, res) {
   const { clientId: bodyClientId } = req.body || {};

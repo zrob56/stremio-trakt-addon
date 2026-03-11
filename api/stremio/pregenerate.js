@@ -1,18 +1,9 @@
-import { Redis } from '@upstash/redis';
+import { getRedis, sleep } from './utils.js';
 import { generateAndCacheAllGenres, resolveCacheNamespace } from './handler.js';
 
 const AI_CATALOG_TTL = 2592000; // 30 days
 const BUDGET_MS = 50000;       // stop generating after 50s (10s margin before Vercel's 60s kill)
 const SLEEP_MS = 15000;        // 15s gap between Gemini calls → 4 RPM, safe under 5 RPM
-
-function getRedis() {
-  if (!process.env.KV_REST_API_URL || !process.env.KV_REST_API_TOKEN) return null;
-  return new Redis({ url: process.env.KV_REST_API_URL, token: process.env.KV_REST_API_TOKEN });
-}
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
 
 function isAiCatalog(id) {
   return (id.startsWith('ai-movie-') || id.startsWith('ai-show-')) &&

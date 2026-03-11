@@ -1,10 +1,8 @@
-import { Redis } from '@upstash/redis';
-import { fetchWithRetry, resolveCacheNamespace, generateAndCacheAllGenres } from './handler.js';
+import { TRAKT_BASE, UUID_REGEX, TraktAuthError, getRedis, setCors,
+         traktHeaders, traktFetch, mapConcurrent, fetchWithRetry } from './utils.js';
+import { resolveCacheNamespace, generateAndCacheAllGenres } from './handler.js';
 
-const TRAKT_BASE = 'https://api.trakt.tv';
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const GENRE_LABELS = {
   overall: null,
@@ -14,47 +12,6 @@ const GENRE_LABELS = {
   mystery: 'Mystery', romance: 'Romance', scifi: 'Science Fiction',
   thriller: 'Thriller', western: 'Western',
 };
-
-function getRedis() {
-  if (!process.env.KV_REST_API_URL || !process.env.KV_REST_API_TOKEN) return null;
-  return new Redis({ url: process.env.KV_REST_API_URL, token: process.env.KV_REST_API_TOKEN });
-}
-
-class TraktAuthError extends Error {
-  constructor(msg) { super(msg); this.name = 'TraktAuthError'; }
-}
-
-function setCors(res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-}
-
-function traktHeaders(clientId, accessToken) {
-  return {
-    'Content-Type': 'application/json',
-    'trakt-api-version': '2',
-    'trakt-api-key': clientId || process.env.TRAKT_CLIENT_ID,
-    'Authorization': `Bearer ${accessToken}`,
-    'User-Agent': 'stremio-trakt-addon/1.0',
-  };
-}
-
-async function traktFetch(url, headers) {
-  const response = await fetchWithRetry(url, { headers });
-  if (response.status === 401) throw new TraktAuthError('Token expired');
-  if (!response.ok) throw new Error(`Trakt API error: ${response.status}`);
-  return response.json();
-}
-
-async function mapConcurrent(items, concurrency, fn) {
-  const results = [];
-  for (let i = 0; i < items.length; i += concurrency) {
-    const batch = await Promise.all(items.slice(i, i + concurrency).map(fn));
-    results.push(...batch);
-  }
-  return results;
-}
 
 async function refreshToken(config) {
   try {

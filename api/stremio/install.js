@@ -1,19 +1,4 @@
-import { Redis } from '@upstash/redis';
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function setCors(res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-}
-
-function getRedis() {
-  if (!process.env.KV_REST_API_URL || !process.env.KV_REST_API_TOKEN) {
-    throw new Error('Upstash Redis not configured');
-  }
-  return new Redis({ url: process.env.KV_REST_API_URL, token: process.env.KV_REST_API_TOKEN });
-}
+import { UUID_REGEX, setCors, getRedis } from './utils.js';
 
 function createManageKey() {
   return `${crypto.randomUUID().replace(/-/g, '')}${crypto.randomUUID().replace(/-/g, '')}`;
@@ -31,10 +16,8 @@ export default async function handler(req, res) {
     if (!uuid || !UUID_REGEX.test(uuid)) {
       return res.status(400).json({ error: 'Invalid uuid' });
     }
-    let redis;
-    try { redis = getRedis(); } catch {
-      return res.status(503).json({ error: 'Storage not configured' });
-    }
+    const redis = getRedis();
+    if (!redis) return res.status(503).json({ error: 'Storage not configured' });
     const raw = await redis.get(`user:${uuid}`);
     if (!raw) return res.status(404).json({ error: 'Not found' });
     const cfg = typeof raw === 'string' ? JSON.parse(raw) : raw;
@@ -51,10 +34,8 @@ export default async function handler(req, res) {
     const uuid = url.searchParams.get('uuid');
     const providedManageKey = url.searchParams.get('k');
     if (!uuid || !UUID_REGEX.test(uuid)) return res.status(400).json({ error: 'Invalid uuid' });
-    let redis;
-    try { redis = getRedis(); } catch {
-      return res.status(503).json({ error: 'Storage not configured' });
-    }
+    const redis = getRedis();
+    if (!redis) return res.status(503).json({ error: 'Storage not configured' });
     let cfg = null;
     try {
       const raw = await redis.get(`user:${uuid}`);
@@ -88,10 +69,8 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Invalid uuid' });
   }
 
-  let redis;
-  try {
-    redis = getRedis();
-  } catch {
+  const redis = getRedis();
+  if (!redis) {
     return res.status(503).json({ error: 'Storage not configured. Set KV_REST_API_URL and KV_REST_API_TOKEN env vars.' });
   }
 

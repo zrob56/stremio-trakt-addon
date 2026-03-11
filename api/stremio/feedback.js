@@ -1,19 +1,4 @@
-const TRAKT_BASE = 'https://api.trakt.tv';
-
-function setCors(res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-}
-
-function traktHeaders(clientId, accessToken) {
-  return {
-    'Content-Type': 'application/json',
-    'trakt-api-version': '2',
-    'trakt-api-key': clientId,
-    'Authorization': `Bearer ${accessToken}`,
-  };
-}
+import { TRAKT_BASE, setCors, traktHeaders } from './utils.js';
 
 async function handleThumbsUp(traktId, imdbId, accessToken, clientId, mediaType) {
   const body = mediaType === 'show'
