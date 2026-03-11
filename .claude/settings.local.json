@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd:*)",
+      "Bash(cd /c/Users/zachr/Desktop/stremio-trakt-addon && npx vercel --prod 2>&1)",
+      "Bash(grep:*)",
+      "Bash(git:*)",
+      "Bash(node --check api/stremio/handler.js 2>&1)"
+    ]
+  }
+}
