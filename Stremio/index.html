@@ -154,18 +154,22 @@
         }
 
         // ─── Gemini Key Validation ────────────────────────────────────
-        const GEMINI_VALIDATE_MODELS = [
-            { name: 'gemini-2.5-flash',    label: 'catalog' },
-            { name: 'gemini-2.0-flash-lite', label: 'search'  },
-        ];
+        let geminiModels = null;
 
         async function validateGeminiKey(key) {
+            const models = geminiModels
+                ? [
+                    { name: geminiModels.catalog, label: 'catalog' },
+                    { name: geminiModels.search,  label: 'search'  },
+                  ]
+                : [];
+            if (!models.length) return { allOk: false, badKey: false, brokenModels: [] };
             const body = JSON.stringify({
                 contents: [{ parts: [{ text: 'ok' }] }],
                 generationConfig: { maxOutputTokens: 1 }
             });
             const results = await Promise.all(
-                GEMINI_VALIDATE_MODELS.map(async ({ name, label }) => {
+                models.map(async ({ name, label }) => {
                     try {
                         const res = await fetch(
                             `https://generativelanguage.googleapis.com/v1beta/models/${name}:generateContent?key=${key}`,
@@ -1818,7 +1822,7 @@
             useEffect(() => {
                 fetch('/api/stremio/config')
                     .then(r => r.json())
-                    .then(d => { if (d.sharedApp) { setSharedApp(true); if (d.clientId) setClientId(d.clientId); } })
+                    .then(d => { if (d.sharedApp) { setSharedApp(true); if (d.clientId) setClientId(d.clientId); } if (d.geminiModels) geminiModels = d.geminiModels; })
                     .catch(() => {});
             }, []);
 

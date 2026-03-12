@@ -1,8 +1,6 @@
 import { TRAKT_BASE, UUID_REGEX, TraktAuthError, getRedis, setCors,
          traktHeaders, traktFetch, mapConcurrent, fetchWithRetry } from './utils.js';
-import { resolveCacheNamespace, generateAndCacheAllGenres } from './handler.js';
-
-const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+import { resolveCacheNamespace, generateAndCacheAllGenres, GEMINI_CATALOG_BASE } from './handler.js';
 
 const GENRE_LABELS = {
   overall: null,
@@ -100,7 +98,7 @@ async function generateCatalog(config, mediaType, genreKey) {
     ? `You are a hidden gems ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 40 underrated, obscure, or cult classic ${mediaLabel} matching the user's taste — NOT mainstream blockbusters, franchises, or well-known Oscar winners. Do not recommend anything from the lists above.${customClause}${excludedClause}\nReturn ONLY a valid JSON array of 40 objects with title and year, no other text:\n[{"title": "Movie Name", "year": 2023}, ...]`
     : `You are a ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 40 ${mediaLabel}${genreClause} matching the user's taste. Do not recommend anything from the lists above.${customClause}${excludedClause}\nReturn ONLY a valid JSON array of 40 objects with title and year, no other text:\n[{"title": "Movie Name", "year": 2023}, ...]`;
 
-  const geminiRes = await fetchWithRetry(`${GEMINI_BASE}?key=${config.geminiKey}`, {
+  const geminiRes = await fetchWithRetry(`${GEMINI_CATALOG_BASE}?key=${config.geminiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

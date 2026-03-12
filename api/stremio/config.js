@@ -1,4 +1,5 @@
 import { setCors } from './utils.js';
+import { GEMINI_CATALOG_MODEL, GEMINI_SEARCH_MODEL } from './handler.js';
 
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') {
@@ -9,5 +10,6 @@ export default async function handler(req, res) {
   return res.json({
     sharedApp: !!(process.env.TRAKT_CLIENT_ID && process.env.TRAKT_CLIENT_SECRET),
     ...(process.env.TRAKT_CLIENT_ID ? { clientId: process.env.TRAKT_CLIENT_ID } : {}),
+    geminiModels: { catalog: GEMINI_CATALOG_MODEL, search: GEMINI_SEARCH_MODEL },
   });
 }

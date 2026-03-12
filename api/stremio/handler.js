@@ -214,8 +214,10 @@ function handleManifest(config, res) {
 
 // ── AI Catalog ────────────────────────────────────────────────
 
-const GEMINI_CATALOG_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent';
-const GEMINI_SEARCH_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent';
+export const GEMINI_CATALOG_MODEL = 'gemini-3-flash-preview';
+export const GEMINI_SEARCH_MODEL  = 'gemini-3.1-flash-lite-preview';
+export const GEMINI_CATALOG_BASE = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_CATALOG_MODEL}:generateContent`;
+const GEMINI_SEARCH_BASE  = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_SEARCH_MODEL}:generateContent`;
 
 // Fetch Trakt history for the given media type and return formatted lists.
 async function fetchTraktHistory(config, isShow) {

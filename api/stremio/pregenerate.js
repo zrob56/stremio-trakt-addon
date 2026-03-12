@@ -1,5 +1,5 @@
 import { getRedis, sleep } from './utils.js';
-import { generateAndCacheAllGenres, resolveCacheNamespace } from './handler.js';
+import { generateAndCacheAllGenres, resolveCacheNamespace, refreshToken } from './handler.js';
 
 const AI_CATALOG_TTL = 2592000; // 30 days
 const BUDGET_MS = 50000;       // stop generating after 50s (10s margin before Vercel's 60s kill)
@@ -72,6 +72,15 @@ export default async function handler(req, res) {
     } catch { continue; }
 
     if (!config.geminiKey) continue;
+
+    // Attempt token refresh if needed — pregenerate has no request context so we do it here
+    try {
+      const refreshed = await refreshToken(config, uuid);
+      if (refreshed) {
+        config = refreshed; // refreshToken already saves to Redis internally
+      }
+    } catch { /* non-fatal — proceed with existing token */ }
+
     const cacheNamespace = resolveCacheNamespace(config, uuid);
     if (!cacheNamespace) continue;
 
