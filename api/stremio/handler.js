@@ -70,7 +70,7 @@ function parseExtra(extraString, searchParams = null) {
 }
 
 
-async function refreshToken(config, uuid) {
+export async function refreshToken(config, uuid) {
   const redis = getRedis();
   const lockKey = uuid ? `refresh-lock:${uuid}` : null;
 
@@ -369,7 +369,7 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
     if (redis && cacheNamespace && genreItems.length > 0) {
       const cacheKey = `ai:${cacheNamespace}:ai-${rawType}-${genre}`;
       try {
-        await redis.set(cacheKey, JSON.stringify(genreItems), { ex: 2592000 });
+        await redis.set(cacheKey, JSON.stringify(genreItems.map(item => item.id)), { ex: 2592000 });
         console.log(`[generateAndCacheAllGenres] Cached ${genreItems.length} items → ${cacheKey}`);
       } catch { /* non-fatal */ }
     }
