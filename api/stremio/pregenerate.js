@@ -1,4 +1,4 @@
-import { getRedis } from './utils.js';
+import { getRedis, mapConcurrent } from './utils.js';
 import { generateAndCacheAllGenres, resolveCacheNamespace, refreshToken } from './handler.js';
 
 const AI_CATALOG_TTL = 2592000; // 30 days
@@ -28,6 +28,69 @@ async function isStale(redis, cacheKey) {
   }
 }
 
+async function processUser(uuid, redis) {
+  let config;
+  try {
+    const raw = await redis.get(`user:${uuid}`);
+    if (!raw) return { processed: 0, skipped: 0 };
+    config = typeof raw === 'string' ? JSON.parse(raw) : raw;
+  } catch { return { processed: 0, skipped: 0 }; }
+
+  if (!config.geminiKey) return { processed: 0, skipped: 0 };
+
+  // Attempt token refresh if needed — pregenerate has no request context so we do it here
+  try {
+    const refreshed = await refreshToken(config, uuid);
+    if (refreshed) {
+      config = refreshed; // refreshToken already saves to Redis internally
+    }
+  } catch { /* non-fatal — proceed with existing token */ }
+
+  const cacheNamespace = resolveCacheNamespace(config, uuid);
+  if (!cacheNamespace) return { processed: 0, skipped: 0 };
+
+  const aiCatalogs = (config.enabledCatalogs || []).filter(isAiCatalog);
+  if (aiCatalogs.length === 0) return { processed: 0, skipped: 0 };
+
+  const movieCatalogs = aiCatalogs.filter(c => c.startsWith('ai-movie-'));
+  const showCatalogs  = aiCatalogs.filter(c => c.startsWith('ai-show-'));
+
+  // Check staleness: if any genre for a type is stale, regenerate all genres for that type
+  let movieStale = false;
+  for (const catalogId of movieCatalogs) {
+    const { rawType, genre } = parseCatalogId(catalogId);
+    if (await isStale(redis, `ai:${cacheNamespace}:ai-${rawType}-${genre}`)) { movieStale = true; break; }
+  }
+
+  let showStale = false;
+  for (const catalogId of showCatalogs) {
+    const { rawType, genre } = parseCatalogId(catalogId);
+    if (await isStale(redis, `ai:${cacheNamespace}:ai-${rawType}-${genre}`)) { showStale = true; break; }
+  }
+
+  let processed = 0;
+  let skipped = 0;
+
+  if (!movieStale) skipped += movieCatalogs.length;
+  if (!showStale)  skipped += showCatalogs.length;
+
+  // Run movie and show generation concurrently — each uses its own Gemini key, no shared rate limit
+  await Promise.all([
+    movieStale && movieCatalogs.length > 0
+      ? generateAndCacheAllGenres('movie', config, redis, cacheNamespace)
+          .then(() => { processed += movieCatalogs.length; })
+          .catch(err => console.error(`pregenerate movie error ${uuid}:`, err.message))
+      : Promise.resolve(),
+    showStale && showCatalogs.length > 0
+      ? generateAndCacheAllGenres('series', config, redis, cacheNamespace)
+          .then(() => { processed += showCatalogs.length; })
+          .catch(err => console.error(`pregenerate show error ${uuid}:`, err.message))
+      : Promise.resolve(),
+  ]);
+
+  return { processed, skipped };
+}
+
 export default async function handler(req, res) {
   // Verify CRON_SECRET — Vercel sends it automatically; can also call manually
   const cronSecret = process.env.CRON_SECRET;
@@ -46,9 +109,6 @@ export default async function handler(req, res) {
   }
 
   const startTime = Date.now();
-  let processed = 0;
-  let skipped = 0;
-  let budgetExceeded = false;
 
   // Scan all user:* keys
   let cursor = 0;
@@ -61,76 +121,17 @@ export default async function handler(req, res) {
     cursor = parseInt(nextCursor, 10);
   } while (cursor !== 0);
 
-  outer:
-  for (const uuid of uuids) {
-    let config;
-    try {
-      const raw = await redis.get(`user:${uuid}`);
-      if (!raw) continue;
-      config = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    } catch { continue; }
+  // Process all users concurrently (concurrency=5 to avoid Vercel memory pressure)
+  // Each user has their own Gemini key so there is no shared rate limit across users
+  const results = await mapConcurrent(uuids, 5, uuid => processUser(uuid, redis));
 
-    if (!config.geminiKey) continue;
-
-    // Attempt token refresh if needed — pregenerate has no request context so we do it here
-    try {
-      const refreshed = await refreshToken(config, uuid);
-      if (refreshed) {
-        config = refreshed; // refreshToken already saves to Redis internally
-      }
-    } catch { /* non-fatal — proceed with existing token */ }
-
-    const cacheNamespace = resolveCacheNamespace(config, uuid);
-    if (!cacheNamespace) continue;
-
-    const aiCatalogs = (config.enabledCatalogs || []).filter(isAiCatalog);
-    if (aiCatalogs.length === 0) continue;
-
-    const movieCatalogs = aiCatalogs.filter(c => c.startsWith('ai-movie-'));
-    const showCatalogs  = aiCatalogs.filter(c => c.startsWith('ai-show-'));
-
-    // Check staleness: if any genre for a type is stale, regenerate all genres for that type
-    let movieStale = false;
-    for (const catalogId of movieCatalogs) {
-      const { rawType, genre } = parseCatalogId(catalogId);
-      if (await isStale(redis, `ai:${cacheNamespace}:ai-${rawType}-${genre}`)) { movieStale = true; break; }
-    }
-
-    let showStale = false;
-    for (const catalogId of showCatalogs) {
-      const { rawType, genre } = parseCatalogId(catalogId);
-      if (await isStale(redis, `ai:${cacheNamespace}:ai-${rawType}-${genre}`)) { showStale = true; break; }
-    }
-
-    if (!movieStale) skipped += movieCatalogs.length;
-    if (!showStale)  skipped += showCatalogs.length;
-
-    if (movieStale && movieCatalogs.length > 0) {
-      try {
-        await generateAndCacheAllGenres('movie', config, redis, cacheNamespace);
-        processed += movieCatalogs.length;
-      } catch (err) {
-        console.error(`pregenerate movie error ${uuid}:`, err.message);
-      }
-      if (Date.now() - startTime > BUDGET_MS) { budgetExceeded = true; break outer; }
-    }
-
-    if (showStale && showCatalogs.length > 0) {
-      try {
-        await generateAndCacheAllGenres('series', config, redis, cacheNamespace);
-        processed += showCatalogs.length;
-      } catch (err) {
-        console.error(`pregenerate show error ${uuid}:`, err.message);
-      }
-      if (Date.now() - startTime > BUDGET_MS) { budgetExceeded = true; break outer; }
-    }
-  }
+  const processed = results.reduce((sum, r) => sum + r.processed, 0);
+  const skipped   = results.reduce((sum, r) => sum + r.skipped,   0);
 
   return res.json({
     processed,
     skipped,
     users: uuids.length,
     elapsed_ms: Date.now() - startTime,
-    budget_exceeded: budgetExceeded,
   });
 }

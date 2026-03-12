@@ -229,23 +229,25 @@ async function fetchTraktHistory(config, isShow) {
   const getItem = r => isShow ? r.show : r.movie;
   const topRated = ratingsRaw
     .filter(r => r.rating >= 7)
-    .map(r => ({ title: getItem(r).title, year: getItem(r).year }));
+    .map(r => ({ title: getItem(r).title, year: getItem(r).year, rating: r.rating }));
   const disliked = ratingsRaw
     .filter(r => r.rating <= 6)
-    .slice(0, 20)
-    .map(r => ({ title: getItem(r).title, year: getItem(r).year }));
+    .slice(0, 30)
+    .map(r => ({ title: getItem(r).title, year: getItem(r).year, rating: r.rating }));
 
   const watchedUrl = isShow
-    ? `${TRAKT_BASE}/users/me/watched/shows?limit=100`
-    : `${TRAKT_BASE}/users/me/watched/movies?limit=100`;
+    ? `${TRAKT_BASE}/users/me/watched/shows?limit=500`
+    : `${TRAKT_BASE}/users/me/watched/movies?limit=500`;
   let watchedTitles = [];
   try {
     const watchedRaw = await traktFetch(watchedUrl, headers);
-    watchedTitles = watchedRaw.map(w => isShow ? w.show.title : w.movie.title);
+    watchedTitles = watchedRaw
+      .filter(w => !isShow || w.plays > 5)
+      .map(w => isShow ? w.show.title : w.movie.title);
   } catch { /* non-fatal */ }
 
   const ratedTitleSet = new Set([...topRated.map(t => t.title), ...disliked.map(d => d.title)]);
-  const watchedNotRated = watchedTitles.filter(t => !ratedTitleSet.has(t)).slice(0, 40);
+  const watchedNotRated = watchedTitles.filter(t => !ratedTitleSet.has(t)).slice(0, 60);
 
   const excluded = new Set(config.excludedFromFeed || []);
   const topRatedActive        = topRated.filter(t => !excluded.has(t.title));
@@ -257,6 +259,7 @@ async function fetchTraktHistory(config, isShow) {
     disliked,
     topRatedActive,
     watchedNotRatedActive,
+    watchedTitles,
   };
 }
 
@@ -275,15 +278,21 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
     console.error('[generateAndCacheAllGenres] Trakt history fetch failed:', err.message);
     return {};
   }
-  const { headers, topRatedActive, watchedNotRatedActive, disliked } = history;
+  const { headers, topRatedActive, watchedNotRatedActive, disliked, watchedTitles } = history;
+
+  const allRatedTitles = [...history.topRated.map(t => t.title), ...history.disliked.map(t => t.title)];
+  const allWatchedSet = new Set([...allRatedTitles, ...watchedTitles]);
+  const alreadyWatchedList = [...allWatchedSet].slice(0, 500).join(', ');
   if (history.topRated.length === 0) {
     console.error('[generateAndCacheAllGenres] No top-rated items found, skipping');
     return {};
   }
 
-  const ratedList    = topRatedActive.slice(0, 25).map(m => m.title).join(', ') || 'None';
-  const watchedList  = watchedNotRatedActive.slice(0, 20).join(', ') || 'None';
-  const dislikedList = disliked.slice(0, 15).map(m => `${m.title} (${m.year})`).join(', ') || 'None';
+  const ratedList    = topRatedActive.slice(0, 40)
+    .map(m => `${m.title} (${m.year}) [${m.rating}/10]`).join(', ') || 'None';
+  const watchedList  = watchedNotRatedActive.slice(0, 35).join(', ') || 'None';
+  const dislikedList = disliked.slice(0, 25)
+    .map(m => `${m.title} (${m.year}) [${m.rating}/10]`).join(', ') || 'None';
   const mediaLabel   = isShow ? 'TV shows' : 'movies';
   const customClause = config.customInstructions?.trim()
     ? `\n\nAdditional instructions from the user: ${config.customInstructions.trim()}`
@@ -300,9 +309,12 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
   const excludedClause = excludedList
     ? `\n\nAlso do not recommend any of these titles the user has excluded: ${excludedList}`
     : '';
+  const alreadyWatchedClause = alreadyWatchedList
+    ? `\n\nDo NOT recommend any of these — the user has already watched them: ${alreadyWatchedList}`
+    : '';
 
   const batchSize = isShow ? 80 : 60;
-  const prompt = `You are a ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly ${batchSize} ${mediaLabel} for EACH of the following categories. Do not recommend anything from the lists above.${customClause}${excludedClause}\n\nCategories and their rules:\n${categoryRules}\n\nReturn ONLY a valid JSON object where each key is a category and the value is an array of ${batchSize} objects with title and year. No other text:\n{"overall": [{"title": "...", "year": 2023}, ...], ...}`;
+  const prompt = `You are a ${mediaLabel} recommendation engine.\n\nLiked: ${ratedList}\n\nAlso watched (no rating): ${watchedList}\n\nDisliked: ${dislikedList}\n\nRecommend exactly ${batchSize} ${mediaLabel} for EACH of the following categories. Do not recommend anything from the lists above.${customClause}${excludedClause}${alreadyWatchedClause}\n\nCategories and their rules:\n${categoryRules}\n\nReturn ONLY a valid JSON object where each key is a category and the value is an array of ${batchSize} objects with title and year. No other text:\n{"overall": [{"title": "...", "year": 2023}, ...], ...}`;
 
   const geminiRes = await fetchWithRetry(`${GEMINI_CATALOG_BASE}?key=${config.geminiKey}`, {
     method: 'POST',
