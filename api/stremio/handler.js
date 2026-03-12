@@ -301,7 +301,8 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
     ? `\n\nAlso do not recommend any of these titles the user has excluded: ${excludedList}`
     : '';
 
-  const prompt = `You are a ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly 40 ${mediaLabel} for EACH of the following categories. Do not recommend anything from the lists above.${customClause}${excludedClause}\n\nCategories and their rules:\n${categoryRules}\n\nReturn ONLY a valid JSON object where each key is a category and the value is an array of 40 objects with title and year. No other text:\n{"overall": [{"title": "...", "year": 2023}, ...], ...}`;
+  const batchSize = isShow ? 50 : 40;
+  const prompt = `You are a ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly ${batchSize} ${mediaLabel} for EACH of the following categories. Do not recommend anything from the lists above.${customClause}${excludedClause}\n\nCategories and their rules:\n${categoryRules}\n\nReturn ONLY a valid JSON object where each key is a category and the value is an array of ${batchSize} objects with title and year. No other text:\n{"overall": [{"title": "...", "year": 2023}, ...], ...}`;
 
   const geminiRes = await fetchWithRetry(`${GEMINI_CATALOG_BASE}?key=${config.geminiKey}`, {
     method: 'POST',
