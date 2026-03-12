@@ -301,7 +301,7 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
     ? `\n\nAlso do not recommend any of these titles the user has excluded: ${excludedList}`
     : '';
 
-  const batchSize = isShow ? 50 : 40;
+  const batchSize = isShow ? 80 : 60;
   const prompt = `You are a ${mediaLabel} recommendation engine.\n\nLiked (7-10/10): ${ratedList}\n\nAlso watched (enjoyed): ${watchedList}\n\nDisliked (1-6/10): ${dislikedList}\n\nRecommend exactly ${batchSize} ${mediaLabel} for EACH of the following categories. Do not recommend anything from the lists above.${customClause}${excludedClause}\n\nCategories and their rules:\n${categoryRules}\n\nReturn ONLY a valid JSON object where each key is a category and the value is an array of ${batchSize} objects with title and year. No other text:\n{"overall": [{"title": "...", "year": 2023}, ...], ...}`;
 
   const geminiRes = await fetchWithRetry(`${GEMINI_CATALOG_BASE}?key=${config.geminiKey}`, {
@@ -357,7 +357,7 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
           return { id: t.ids.imdb, name: t.title, year: t.year, rating: t.rating, overview: t.overview, genres: t.genres };
         }
         const top = data[0]?.[traktType];
-        if (top?.ids?.imdb && Math.abs((top.year || 0) - item.year) <= 1) {
+        if (top?.ids?.imdb) {
           return { id: top.ids.imdb, name: top.title, year: top.year, rating: top.rating, overview: top.overview, genres: top.genres };
         }
         return null;
@@ -397,7 +397,7 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, cacheName
         const cachedItems = Array.isArray(data)
           ? data.map(m => (typeof m === 'string' ? { id: m } : m)).filter(m => m.id)
           : [];
-        const page = cachedItems.slice(skip, skip + 40);
+        const page = cachedItems.slice(skip);
         return res.json({ metas: page.map(m => ({
           id: m.id,
           type: mediaType,
@@ -437,7 +437,7 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, cacheName
     const allResults = await generateAndCacheAllGenres(mediaType, config, redis, cacheNamespace);
     const genItems = allResults?.[genreKey] ?? [];
     res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
-    return res.json({ metas: genItems.slice(0, 40).map(m => ({
+    return res.json({ metas: genItems.map(m => ({
       id: m.id,
       type: mediaType,
       name: m.name || undefined,

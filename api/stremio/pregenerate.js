@@ -1,9 +1,8 @@
-import { getRedis, sleep } from './utils.js';
+import { getRedis } from './utils.js';
 import { generateAndCacheAllGenres, resolveCacheNamespace, refreshToken } from './handler.js';
 
 const AI_CATALOG_TTL = 2592000; // 30 days
 const BUDGET_MS = 50000;       // stop generating after 50s (10s margin before Vercel's 60s kill)
-const SLEEP_MS = 15000;        // 15s gap between Gemini calls → 4 RPM, safe under 5 RPM
 
 function isAiCatalog(id) {
   return (id.startsWith('ai-movie-') || id.startsWith('ai-show-')) &&
@@ -114,7 +113,6 @@ export default async function handler(req, res) {
         console.error(`pregenerate movie error ${uuid}:`, err.message);
       }
       if (Date.now() - startTime > BUDGET_MS) { budgetExceeded = true; break outer; }
-      await sleep(SLEEP_MS);
     }
 
     if (showStale && showCatalogs.length > 0) {
@@ -125,7 +123,6 @@ export default async function handler(req, res) {
         console.error(`pregenerate show error ${uuid}:`, err.message);
       }
       if (Date.now() - startTime > BUDGET_MS) { budgetExceeded = true; break outer; }
-      await sleep(SLEEP_MS);
     }
   }
 
