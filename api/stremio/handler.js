@@ -301,7 +301,7 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
 
   const genreKeys = isShow ? ALL_SHOW_GENRE_KEYS : ALL_MOVIE_GENRE_KEYS;
   const categoryRules = genreKeys.map(k => {
-    if (k === 'overall')   return `- overall: best matches for the user's taste, any genre`;
+    if (k === 'overall')   return `- overall: best matches for the user's taste, any genre — span a variety of decades (1950s through present), tones (serious, comedic, dark, light), and audience demographics; do not cluster around any single sub-genre or recent watch activity`;
     if (k === 'gems')      return `- gems: underrated, obscure, or cult classics — NOT mainstream blockbusters or well-known franchises`;
     if (k === 'bingeable') return `- bingeable: series designed for binge-watching — short seasons (6–10 episodes), strong episode-to-episode hooks, high completion rates — NOT long-running procedurals, soap operas, or shows with 20+ episode seasons`;
     if (k === 'documentary' && isShow)  return `- documentary: docuseries, true crime series, investigative journalism shows, and nature/science series — broad factual series including crime investigations, exposés, and real-event storytelling`;
@@ -381,6 +381,11 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
       } catch { return null; }
     });
     const genreItems = resolved.filter(item => item && /^tt\d+$/.test(item.id));
+    // Fisher-Yates shuffle so each cache regeneration surfaces different titles first
+    for (let i = genreItems.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [genreItems[i], genreItems[j]] = [genreItems[j], genreItems[i]];
+    }
     return [genre, genreItems];
   }));
 
