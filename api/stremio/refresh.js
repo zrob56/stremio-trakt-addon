@@ -2,7 +2,7 @@ import { UUID_REGEX, setCors, getRedis } from './utils.js';
 import { generateAndCacheAllGenres } from './handler.js';
 
 const MOVIE_GENRE_KEYS = ['overall','action','adventure','animation','comedy','crime','documentary','drama','fantasy','horror','mystery','romance','scifi','thriller','western'];
-const SHOW_GENRE_KEYS  = ['overall','action','adventure','animation','comedy','crime','drama','fantasy','horror','mystery','romance','scifi','thriller'];
+const SHOW_GENRE_KEYS  = ['overall','action','adventure','animation','comedy','crime','documentary','drama','fantasy','horror','mystery','romance','scifi','thriller','bingeable'];
 
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') {
@@ -41,7 +41,6 @@ export default async function handler(req, res) {
     ...SHOW_GENRE_KEYS.map(g => `ai:${cacheId}:ai-show-${g}`),
     `ai:${cacheId}:ai-movie-gems`,
     `ai:${cacheId}:ai-show-gems`,
-    `ai:${cacheId}:ai-show-bingeable`,
   ];
 
   try {
