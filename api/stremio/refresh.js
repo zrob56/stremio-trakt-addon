@@ -1,4 +1,5 @@
 import { UUID_REGEX, setCors, getRedis } from './utils.js';
+import { generateAndCacheAllGenres } from './handler.js';
 
 const MOVIE_GENRE_KEYS = ['overall','action','adventure','animation','comedy','crime','documentary','drama','fantasy','horror','mystery','romance','scifi','thriller','western'];
 const SHOW_GENRE_KEYS  = ['overall','action','adventure','animation','comedy','crime','drama','fantasy','horror','mystery','romance','scifi','thriller'];
@@ -25,10 +26,12 @@ export default async function handler(req, res) {
   }
 
   let cacheId = uuid;
+  let config = null;
   try {
     const raw = await redis.get(`user:${uuid}`);
     if (raw) {
       const cfg = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      config = cfg;
       if (cfg?.traktUsername) cacheId = cfg.traktUsername;
     }
   } catch { /* fall back to uuid */ }
@@ -38,10 +41,21 @@ export default async function handler(req, res) {
     ...SHOW_GENRE_KEYS.map(g => `ai:${cacheId}:ai-show-${g}`),
     `ai:${cacheId}:ai-movie-gems`,
     `ai:${cacheId}:ai-show-gems`,
+    `ai:${cacheId}:ai-show-bingeable`,
   ];
 
   try {
     const cleared = await redis.del(...keys);
+
+    // Fire-and-forget regeneration — warm cache in background so next Stremio open is fast
+    if (config?.geminiKey && config?.accessToken) {
+      const regen = (type) =>
+        generateAndCacheAllGenres(type, config, redis, cacheId)
+          .catch(e => console.error(`[refresh] background regen failed (${type}):`, e.message));
+      regen('movie');
+      regen('series');
+    }
+
     return res.json({ ok: true, cleared });
   } catch (err) {
     return res.status(500).json({ error: 'Failed to clear cache' });

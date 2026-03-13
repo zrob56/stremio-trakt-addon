@@ -112,13 +112,14 @@ const GENRE_LABELS = {
   drama: 'Drama', fantasy: 'Fantasy', horror: 'Horror',
   mystery: 'Mystery', romance: 'Romance', scifi: 'Science Fiction',
   thriller: 'Thriller', western: 'Western',
+  bingeable: 'Binge-worthy',
 };
 
 const MOVIE_GENRE_KEYS = ['overall','action','adventure','animation','comedy','crime','documentary','drama','fantasy','horror','mystery','romance','scifi','thriller','western'];
 const SHOW_GENRE_KEYS  = ['overall','action','adventure','animation','comedy','crime','drama','fantasy','horror','mystery','romance','scifi','thriller'];
 
 const ALL_MOVIE_GENRE_KEYS = [...MOVIE_GENRE_KEYS, 'gems'];
-const ALL_SHOW_GENRE_KEYS  = [...SHOW_GENRE_KEYS,  'gems'];
+const ALL_SHOW_GENRE_KEYS  = [...SHOW_GENRE_KEYS,  'gems', 'bingeable'];
 
 // ── Manifest ──────────────────────────────────────────────────
 
@@ -131,8 +132,9 @@ const AI_CATALOG_DEFS = [
     type: 'series', id: `ai-show-${g}`, extra: [{ name: 'skip', isRequired: false }],
     name: g === 'overall' ? 'Show Picks' : `${GENRE_LABELS[g]}`,
   })),
-  { type: 'movie',  id: 'ai-movie-gems',    extra: [{ name: 'skip', isRequired: false }],     name: 'Hidden Gem Movies' },
-  { type: 'series', id: 'ai-show-gems',     extra: [{ name: 'skip', isRequired: false }],     name: 'Hidden Gem Shows'  },
+  { type: 'movie',  id: 'ai-movie-gems',      extra: [{ name: 'skip', isRequired: false }],   name: 'Hidden Gem Movies'  },
+  { type: 'series', id: 'ai-show-gems',      extra: [{ name: 'skip', isRequired: false }],   name: 'Hidden Gem Shows'   },
+  { type: 'series', id: 'ai-show-bingeable', extra: [{ name: 'skip', isRequired: false }],   name: 'Binge-worthy Shows' },
   { type: 'movie',  id: 'ai-search-movie',  extra: [{ name: 'search', isRequired: true }],    name: 'AI Movie Search'   },
   { type: 'series', id: 'ai-search-series', extra: [{ name: 'search', isRequired: true }],    name: 'AI Show Search'    },
 ];
@@ -300,8 +302,11 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
 
   const genreKeys = isShow ? ALL_SHOW_GENRE_KEYS : ALL_MOVIE_GENRE_KEYS;
   const categoryRules = genreKeys.map(k => {
-    if (k === 'overall') return `- overall: best matches for the user's taste, any genre`;
-    if (k === 'gems')    return `- gems: underrated, obscure, or cult classics — NOT mainstream blockbusters or well-known franchises`;
+    if (k === 'overall')   return `- overall: best matches for the user's taste, any genre`;
+    if (k === 'gems')      return `- gems: underrated, obscure, or cult classics — NOT mainstream blockbusters or well-known franchises`;
+    if (k === 'bingeable') return `- bingeable: series designed for binge-watching — short seasons (6–10 episodes), strong episode-to-episode hooks, high completion rates — NOT long-running procedurals, soap operas, or shows with 20+ episode seasons`;
+    if (k === 'documentary') return `- documentary: documentaries, docuseries, true crime, investigative journalism, and nature/science docs — broad factual content including crime investigations, exposés, and real-event storytelling`;
+    if (k === 'comedy' && isShow) return `- comedy: scripted comedy series, sitcoms, and comedy talk shows — NOT generic interview shows, variety shows, or sketch shows`;
     return `- ${k}: specifically ${GENRE_LABELS[k]} genre`;
   }).join('\n');
 
@@ -410,7 +415,7 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, cacheName
           ? data.map(m => (typeof m === 'string' ? { id: m } : m)).filter(m => m.id)
           : [];
         const page = cachedItems.slice(skip);
-        return res.json({ metas: page.map(m => ({
+        const result = { metas: page.map(m => ({
           id: m.id,
           type: mediaType,
           name: m.name || undefined,
@@ -420,7 +425,24 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, cacheName
           imdbRating: m.rating ? m.rating.toFixed(1) : undefined,
           genres: m.genres || undefined,
           behaviorHints: mediaType === 'movie' ? { defaultVideoId: m.id } : undefined,
-        })) });
+        })) };
+
+        // Stale-while-revalidate: if cache older than ~20 days (< 10 days TTL remaining), refresh in background
+        redis.ttl(cacheKey).then(ttl => {
+          if (ttl >= 0 && ttl < 864000) {
+            const swrLockKey = `ai-lock:${cacheNamespace}:${mediaType === 'series' ? 'show' : 'movie'}`;
+            redis.set(swrLockKey, '1', { nx: true, ex: 300 })
+              .then(lockResult => {
+                if (lockResult === 'OK') {
+                  return generateAndCacheAllGenres(mediaType, config, redis, cacheNamespace)
+                    .finally(() => redis.del(swrLockKey).catch(() => {}));
+                }
+              })
+              .catch(() => {});
+          }
+        }).catch(() => {});
+
+        return res.json(result);
       }
     } catch { /* non-fatal */ }
   }
