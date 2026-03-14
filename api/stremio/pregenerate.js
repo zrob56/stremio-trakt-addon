@@ -32,11 +32,11 @@ async function processUser(uuid, redis) {
   let config;
   try {
     const raw = await redis.get(`user:${uuid}`);
-    if (!raw) return { processed: 0, skipped: 0 };
+    if (!raw) return { processed: 0, skipped: 0, reason: 'no_config' };
     config = typeof raw === 'string' ? JSON.parse(raw) : raw;
-  } catch { return { processed: 0, skipped: 0 }; }
+  } catch { return { processed: 0, skipped: 0, reason: 'config_parse_error' }; }
 
-  if (!config.geminiKey) return { processed: 0, skipped: 0 };
+  if (!config.geminiKey) return { processed: 0, skipped: 0, reason: 'no_gemini_key' };
 
   // Attempt token refresh if needed — pregenerate has no request context so we do it here
   try {
@@ -47,10 +47,10 @@ async function processUser(uuid, redis) {
   } catch { /* non-fatal — proceed with existing token */ }
 
   const cacheNamespace = resolveCacheNamespace(config, uuid);
-  if (!cacheNamespace) return { processed: 0, skipped: 0 };
+  if (!cacheNamespace) return { processed: 0, skipped: 0, reason: 'no_namespace' };
 
   const aiCatalogs = (config.enabledCatalogs || []).filter(isAiCatalog);
-  if (aiCatalogs.length === 0) return { processed: 0, skipped: 0 };
+  if (aiCatalogs.length === 0) return { processed: 0, skipped: 0, reason: 'no_ai_catalogs' };
 
   const movieCatalogs = aiCatalogs.filter(c => c.startsWith('ai-movie-'));
   const showCatalogs  = aiCatalogs.filter(c => c.startsWith('ai-show-'));
@@ -68,8 +68,13 @@ async function processUser(uuid, redis) {
     if (await isStale(redis, `ai:${cacheNamespace}:ai-${rawType}-${genre}`)) { showStale = true; break; }
   }
 
+  if (!movieStale && !showStale) {
+    return { processed: 0, skipped: aiCatalogs.length, reason: 'cache_fresh' };
+  }
+
   let processed = 0;
   let skipped = 0;
+  let errors = 0;
 
   if (!movieStale) skipped += movieCatalogs.length;
   if (!showStale)  skipped += showCatalogs.length;
@@ -79,16 +84,16 @@ async function processUser(uuid, redis) {
     movieStale && movieCatalogs.length > 0
       ? generateAndCacheAllGenres('movie', config, redis, cacheNamespace)
           .then(() => { processed += movieCatalogs.length; })
-          .catch(err => console.error(`pregenerate movie error ${uuid}:`, err.message))
+          .catch(err => { errors++; console.error(`pregenerate movie error ${uuid}:`, err.message); })
       : Promise.resolve(),
     showStale && showCatalogs.length > 0
       ? generateAndCacheAllGenres('series', config, redis, cacheNamespace)
           .then(() => { processed += showCatalogs.length; })
-          .catch(err => console.error(`pregenerate show error ${uuid}:`, err.message))
+          .catch(err => { errors++; console.error(`pregenerate show error ${uuid}:`, err.message); })
       : Promise.resolve(),
   ]);
 
-  return { processed, skipped };
+  return { processed, skipped, errors };
 }
 
 export default async function handler(req, res) {
@@ -123,15 +128,31 @@ export default async function handler(req, res) {
 
   // Process all users concurrently (concurrency=5 to avoid Vercel memory pressure)
   // Each user has their own Gemini key so there is no shared rate limit across users
-  const results = await mapConcurrent(uuids, 5, uuid => processUser(uuid, redis));
+  let budget_exceeded = false;
+  const results = await mapConcurrent(uuids, 5, uuid => {
+    if (Date.now() - startTime > BUDGET_MS) {
+      budget_exceeded = true;
+      return { processed: 0, skipped: 0, reason: 'budget_exceeded' };
+    }
+    return processUser(uuid, redis);
+  });
 
-  const processed = results.reduce((sum, r) => sum + r.processed, 0);
-  const skipped   = results.reduce((sum, r) => sum + r.skipped,   0);
+  const processed   = results.reduce((sum, r) => sum + r.processed,    0);
+  const skipped     = results.reduce((sum, r) => sum + r.skipped,      0);
+  const errors      = results.reduce((sum, r) => sum + (r.errors || 0), 0);
+
+  const skip_reasons = {};
+  for (const r of results) {
+    if (r.reason) skip_reasons[r.reason] = (skip_reasons[r.reason] || 0) + 1;
+  }
 
   return res.json({
     processed,
     skipped,
+    errors,
+    budget_exceeded,
     users: uuids.length,
+    skip_reasons,
     elapsed_ms: Date.now() - startTime,
   });
 }
