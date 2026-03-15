@@ -48,11 +48,18 @@ export default async function handler(req, res) {
 
     // Fire-and-forget regeneration — warm cache in background so next Stremio open is fast
     if (config?.geminiKey && config?.accessToken) {
-      const regen = (type) =>
-        generateAndCacheAllGenres(type, config, redis, cacheId)
-          .catch(e => console.error(`[refresh] background regen failed (${type}):`, e.message));
-      regen('movie');
-      regen('series');
+      (async () => {
+        let currentConfig = config;
+        await generateAndCacheAllGenres('movie', currentConfig, redis, cacheId, uuid)
+          .catch(e => console.error(`[refresh] background regen failed (movie):`, e.message));
+        // Re-read config: if movie triggered a token refresh, series must use the new tokens
+        try {
+          const raw = await redis.get(`user:${uuid}`);
+          if (raw) currentConfig = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        } catch { /* non-fatal */ }
+        await generateAndCacheAllGenres('series', currentConfig, redis, cacheId, uuid)
+          .catch(e => console.error(`[refresh] background regen failed (series):`, e.message));
+      })();
     }
 
     return res.json({ ok: true, cleared });
