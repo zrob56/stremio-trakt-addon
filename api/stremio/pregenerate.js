@@ -71,19 +71,25 @@ async function processUser(uuid, redis) {
   if (!movieStale) skipped += movieCatalogs.length;
   if (!showStale)  skipped += showCatalogs.length;
 
-  // Run movie and show generation concurrently — each uses its own Gemini key, no shared rate limit
-  await Promise.all([
-    movieStale && movieCatalogs.length > 0
-      ? generateAndCacheAllGenres('movie', config, redis, cacheNamespace, uuid)
-          .then(() => { processed += movieCatalogs.length; })
-          .catch(err => { errors++; console.error(`pregenerate movie error ${uuid}:`, err.message); })
-      : Promise.resolve(),
-    showStale && showCatalogs.length > 0
-      ? generateAndCacheAllGenres('series', config, redis, cacheNamespace, uuid)
-          .then(() => { processed += showCatalogs.length; })
-          .catch(err => { errors++; console.error(`pregenerate show error ${uuid}:`, err.message); })
-      : Promise.resolve(),
-  ]);
+  // Run movie then series sequentially to avoid concurrent token refresh race condition.
+  // If both hit a 401 simultaneously in Promise.all, both call refreshToken concurrently —
+  // the second caller reads stale Redis before the first caller's saveRefreshedConfig completes,
+  // then overwrites the new tokens with old ones. Sequential execution eliminates this.
+  if (movieStale && movieCatalogs.length > 0) {
+    await generateAndCacheAllGenres('movie', config, redis, cacheNamespace, uuid)
+      .then(() => { processed += movieCatalogs.length; })
+      .catch(err => { errors++; console.error(`pregenerate movie error ${uuid}:`, err.message); });
+    // Re-read config from Redis: if movie triggered a token refresh, series must use the new tokens.
+    try {
+      const raw = await redis.get(`user:${uuid}`);
+      if (raw) config = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    } catch { /* non-fatal */ }
+  }
+  if (showStale && showCatalogs.length > 0) {
+    await generateAndCacheAllGenres('series', config, redis, cacheNamespace, uuid)
+      .then(() => { processed += showCatalogs.length; })
+      .catch(err => { errors++; console.error(`pregenerate show error ${uuid}:`, err.message); });
+  }
 
   return { processed, skipped, errors };
 }
