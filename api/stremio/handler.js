@@ -267,7 +267,7 @@ async function fetchTraktHistory(config, isShow) {
 // Make ONE Gemini call covering ALL genre keys for the given media type.
 // Parses the JSON object response, resolves IMDB IDs for each genre, writes
 // each genre to its own cache key, and returns a { genre: imdbIds[] } map.
-export async function generateAndCacheAllGenres(mediaType, config, redis, cacheNamespace) {
+export async function generateAndCacheAllGenres(mediaType, config, redis, cacheNamespace, uuid = null) {
   const isShow = mediaType === 'series';
   const weekNum = Math.floor(Date.now() / (7 * 24 * 60 * 60 * 1000));
   const temperature = [0.7, 0.8, 0.9, 1.0][weekNum % 4];
@@ -276,8 +276,25 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
   try {
     history = await fetchTraktHistory(config, isShow);
   } catch (err) {
-    console.error('[generateAndCacheAllGenres] Trakt history fetch failed:', err.message);
-    return {};
+    if (err instanceof TraktAuthError && config.refreshToken) {
+      const newConfig = await refreshToken(config, uuid);
+      if (newConfig) {
+        await saveRefreshedConfig(uuid, newConfig);
+        try {
+          history = await fetchTraktHistory(newConfig, isShow);
+          config = newConfig;
+        } catch (retryErr) {
+          console.error('[generateAndCacheAllGenres] Trakt history fetch failed after refresh:', retryErr.message);
+          return {};
+        }
+      } else {
+        console.error('[generateAndCacheAllGenres] Token refresh failed — re-authenticate required');
+        return {};
+      }
+    } else {
+      console.error('[generateAndCacheAllGenres] Trakt history fetch failed:', err.message);
+      return {};
+    }
   }
   const { headers, topRatedActive, watchedNotRatedActive, disliked, watchedTitles } = history;
 
@@ -408,7 +425,7 @@ function rpdbPoster(imdbId) {
   return `https://api.ratingposterdb.com/${RPDB_FREE_KEY}/imdb/poster-default/${imdbId}.jpg`;
 }
 
-async function handleAICatalog(config, mediaType, genreKey, skip, res, cacheNamespace = null) {
+async function handleAICatalog(config, mediaType, genreKey, skip, res, cacheNamespace = null, uuid = null) {
   const redis = cacheNamespace ? getRedis() : null;
   const cacheKey = cacheNamespace ? `ai:${cacheNamespace}:ai-${mediaType === 'series' ? 'show' : 'movie'}-${genreKey}` : null;
   if (redis && cacheKey) {
@@ -439,7 +456,7 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, cacheName
             redis.set(swrLockKey, '1', { nx: true, ex: 300 })
               .then(lockResult => {
                 if (lockResult === 'OK') {
-                  return generateAndCacheAllGenres(mediaType, config, redis, cacheNamespace)
+                  return generateAndCacheAllGenres(mediaType, config, redis, cacheNamespace, uuid)
                     .finally(() => redis.del(swrLockKey).catch(() => {}));
                 }
               })
@@ -473,7 +490,7 @@ async function handleAICatalog(config, mediaType, genreKey, skip, res, cacheName
 
   try {
     // Batched call: one Gemini request warms all genre keys for this media type at once
-    const allResults = await generateAndCacheAllGenres(mediaType, config, redis, cacheNamespace);
+    const allResults = await generateAndCacheAllGenres(mediaType, config, redis, cacheNamespace, uuid);
     const genItems = allResults?.[genreKey] ?? [];
     res.setHeader('Cache-Control', 'public, max-age=14400, s-maxage=86400, stale-while-revalidate=604800');
     return res.json({ metas: genItems.map(m => ({
@@ -733,7 +750,7 @@ switch (id) {
         const aiMediaType = parts[1] === 'show' ? 'series' : parts[1];
         const genreKey = parts[2] || 'overall';
         const skip = parseInt(params.skip) || 0;
-        return await handleAICatalog(config, aiMediaType, genreKey, skip, res, cacheNamespace);
+        return await handleAICatalog(config, aiMediaType, genreKey, skip, res, cacheNamespace, uuid);
       }
       return res.json({ metas: [] });
     }

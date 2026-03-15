@@ -1,5 +1,5 @@
 import { getRedis, mapConcurrent } from './utils.js';
-import { generateAndCacheAllGenres, resolveCacheNamespace, refreshToken } from './handler.js';
+import { generateAndCacheAllGenres, resolveCacheNamespace } from './handler.js';
 
 const AI_CATALOG_TTL = 2592000; // 30 days
 const BUDGET_MS = 50000;       // stop generating after 50s (10s margin before Vercel's 60s kill)
@@ -38,14 +38,6 @@ async function processUser(uuid, redis) {
 
   if (!config.geminiKey) return { processed: 0, skipped: 0, reason: 'no_gemini_key' };
 
-  // Attempt token refresh if needed — pregenerate has no request context so we do it here
-  try {
-    const refreshed = await refreshToken(config, uuid);
-    if (refreshed) {
-      config = refreshed; // refreshToken already saves to Redis internally
-    }
-  } catch { /* non-fatal — proceed with existing token */ }
-
   const cacheNamespace = resolveCacheNamespace(config, uuid);
   if (!cacheNamespace) return { processed: 0, skipped: 0, reason: 'no_namespace' };
 
@@ -82,12 +74,12 @@ async function processUser(uuid, redis) {
   // Run movie and show generation concurrently — each uses its own Gemini key, no shared rate limit
   await Promise.all([
     movieStale && movieCatalogs.length > 0
-      ? generateAndCacheAllGenres('movie', config, redis, cacheNamespace)
+      ? generateAndCacheAllGenres('movie', config, redis, cacheNamespace, uuid)
           .then(() => { processed += movieCatalogs.length; })
           .catch(err => { errors++; console.error(`pregenerate movie error ${uuid}:`, err.message); })
       : Promise.resolve(),
     showStale && showCatalogs.length > 0
-      ? generateAndCacheAllGenres('series', config, redis, cacheNamespace)
+      ? generateAndCacheAllGenres('series', config, redis, cacheNamespace, uuid)
           .then(() => { processed += showCatalogs.length; })
           .catch(err => { errors++; console.error(`pregenerate show error ${uuid}:`, err.message); })
       : Promise.resolve(),
