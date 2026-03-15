@@ -121,6 +121,15 @@ const GENRE_LABELS = {
   bingeable: 'Binge-worthy',
 };
 
+// Maps our genre keys to Trakt's genre strings for post-processing validation
+const TRAKT_GENRE_FILTER = {
+  action: 'action', adventure: 'adventure', animation: 'animation',
+  comedy: 'comedy', crime: 'crime', documentary: 'documentary',
+  drama: 'drama', fantasy: 'fantasy', horror: 'horror',
+  mystery: 'mystery', romance: 'romance', scifi: 'science-fiction',
+  thriller: 'thriller', western: 'western',
+};
+
 const MOVIE_GENRE_KEYS = ['overall','action','adventure','animation','comedy','crime','documentary','drama','fantasy','horror','mystery','romance','scifi','thriller','western'];
 const SHOW_GENRE_KEYS  = ['overall','action','adventure','animation','comedy','crime','documentary','drama','fantasy','horror','mystery','romance','scifi','thriller','bingeable'];
 
@@ -327,10 +336,9 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
     if (k === 'overall')   return `- overall: best matches for the user's taste, any genre — span a variety of decades (1950s through present), tones (serious, comedic, dark, light), and audience demographics; do not cluster around any single sub-genre or recent watch activity`;
     if (k === 'gems')      return `- gems: underrated, obscure, or cult classics — NOT mainstream blockbusters or well-known franchises`;
     if (k === 'bingeable') return `- bingeable: series designed for binge-watching — short seasons (6–10 episodes), strong episode-to-episode hooks, high completion rates — NOT long-running procedurals, soap operas, or shows with 20+ episode seasons`;
-    if (k === 'documentary' && isShow)  return `- documentary: docuseries, true crime series, investigative journalism shows, and nature/science series — broad factual series including crime investigations, exposés, and real-event storytelling`;
-    if (k === 'documentary' && !isShow) return `- documentary: documentary films, true crime docs, investigative journalism, and nature/science docs — broad factual content including crime investigations, exposés, and real-event storytelling`;
+    if (k === 'documentary') return `- documentary: ONLY documentary ${isShow ? 'series' : 'films'} — must be classified as documentary; do NOT include action, drama, thriller, horror, or any other non-documentary genre`;
     if (k === 'comedy' && isShow) return `- comedy: scripted comedy series, sitcoms, and comedy talk shows — NOT generic interview shows, variety shows, or sketch shows`;
-    return `- ${k}: specifically ${GENRE_LABELS[k]} genre`;
+    return `- ${k}: ONLY ${GENRE_LABELS[k]} genre — must be classified as ${GENRE_LABELS[k]}; do not include titles from other genres`;
   }).join('\n');
 
   const excludedList = (config.excludedFromFeed || []).slice(0, 50).join(', ');
@@ -341,8 +349,14 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
     ? `\n\nDo NOT recommend any of these — the user has already watched them: ${alreadyWatchedList}`
     : '';
 
+  const mediaConstraint = isShow
+    ? `IMPORTANT: Every recommendation must be a TV show or series. Do not include any movies or films.`
+    : `IMPORTANT: Every recommendation must be a movie or film. Do not include any TV shows, miniseries, or series.`;
+
+  const nudityConstraint = `Do not recommend any title that contains graphic nudity or explicit sexual content.`;
+
   const batchSize = isShow ? 80 : 60;
-  const prompt = `You are a ${mediaLabel} recommendation engine.\n\nLiked: ${ratedList}\n\nAlso watched (no rating): ${watchedList}\n\nDisliked: ${dislikedList}\n\nRecommend exactly ${batchSize} ${mediaLabel} for EACH of the following categories. Do not recommend anything from the lists above.${customClause}${excludedClause}${alreadyWatchedClause}\n\nCategories and their rules:\n${categoryRules}\n\nReturn ONLY a valid JSON object where each key is a category and the value is an array of ${batchSize} objects with title and year. No other text:\n{"overall": [{"title": "...", "year": 2023}, ...], ...}`;
+  const prompt = `You are a ${mediaLabel} recommendation engine.\n\n${mediaConstraint}\n\n${nudityConstraint}\n\nLiked: ${ratedList}\n\nAlso watched (no rating): ${watchedList}\n\nDisliked: ${dislikedList}\n\nRecommend exactly ${batchSize} ${mediaLabel} for EACH of the following categories. Do not recommend anything from the lists above.${customClause}${excludedClause}${alreadyWatchedClause}\n\nCategories and their rules:\n${categoryRules}\n\nReturn ONLY a valid JSON object where each key is a category and the value is an array of ${batchSize} objects with title and year. No other text:\n{"overall": [{"title": "...", "year": 2023}, ...], ...}`;
 
   const geminiRes = await fetchWithRetry(`${GEMINI_CATALOG_BASE}?key=${config.geminiKey}`, {
     method: 'POST',
@@ -403,7 +417,13 @@ export async function generateAndCacheAllGenres(mediaType, config, redis, cacheN
         return null;
       } catch { return null; }
     });
-    const genreItems = resolved.filter(item => item && /^tt\d+$/.test(item.id));
+    let genreItems = resolved.filter(item => item && /^tt\d+$/.test(item.id));
+    // Post-processing: filter by Trakt genre metadata to prevent genre bleed
+    const traktGenreTag = TRAKT_GENRE_FILTER[genre];
+    if (traktGenreTag) {
+      const filtered = genreItems.filter(item => item.genres?.includes(traktGenreTag));
+      if (filtered.length >= 5) genreItems = filtered;
+    }
     // Fisher-Yates shuffle so each cache regeneration surfaces different titles first
     for (let i = genreItems.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
