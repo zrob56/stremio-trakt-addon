@@ -1,5 +1,5 @@
 import { getRedis, mapConcurrent } from './utils.js';
-import { generateAndCacheAllGenres, resolveCacheNamespace } from './handler.js';
+import { generateAndCacheAllGenres, resolveCacheNamespace, refreshToken, saveRefreshedConfig } from './handler.js';
 
 const AI_CATALOG_TTL = 2592000; // 30 days
 const BUDGET_MS = 50000;       // stop generating after 50s (10s margin before Vercel's 60s kill)
@@ -37,6 +37,21 @@ async function processUser(uuid, redis) {
   } catch { return { processed: 0, skipped: 0, reason: 'config_parse_error' }; }
 
   if (!config.geminiKey) return { processed: 0, skipped: 0, reason: 'no_gemini_key' };
+
+  // Proactively refresh access token if expired or expiring within 15 days.
+  // This keeps the refresh token alive (90-day Trakt inactivity limit) even for
+  // users who haven't opened Stremio recently.
+  if (config.createdAt && config.expiresIn && config.refreshToken) {
+    const expiresAtMs = (config.createdAt + config.expiresIn) * 1000;
+    const refreshWindowMs = 15 * 24 * 3600 * 1000; // 15 days
+    if (Date.now() > expiresAtMs - refreshWindowMs) {
+      const newConfig = await refreshToken(config, uuid);
+      if (newConfig) {
+        await saveRefreshedConfig(uuid, newConfig);
+        config = newConfig;
+      }
+    }
+  }
 
   const cacheNamespace = resolveCacheNamespace(config, uuid);
   if (!cacheNamespace) return { processed: 0, skipped: 0, reason: 'no_namespace' };

@@ -31,7 +31,7 @@ export function resolveCacheNamespace(config, uuid) {
   return config?.traktUsername || uuid || null;
 }
 
-async function saveRefreshedConfig(uuid, newConfig) {
+export async function saveRefreshedConfig(uuid, newConfig) {
   if (!uuid) return;
   try {
     const redis = getRedis();
@@ -97,7 +97,13 @@ export async function refreshToken(config, uuid) {
     });
     if (!response.ok) return null;
     const tokens = await response.json();
-    return { ...config, accessToken: tokens.access_token, refreshToken: tokens.refresh_token };
+    return {
+      ...config,
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token,
+      expiresIn: tokens.expires_in,
+      createdAt: tokens.created_at,
+    };
   } finally {
     if (redis && lockKey) await redis.del(lockKey).catch(() => {});
   }
